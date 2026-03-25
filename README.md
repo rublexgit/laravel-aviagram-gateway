@@ -42,9 +42,11 @@ use Aviagram\Facades\Aviagram;
 
 $response = Aviagram::initiatePayment(
     new OrderData(
+        id: 'INV-1774369486',
         amount: '15',
         currency: 'EUR',
-    )
+    ),
+    userCallbackUrl: 'https://your-app.example.com/finpay/final-callback'
 );
 ```
 
@@ -67,8 +69,7 @@ $result = $gateway->initiate(new PaymentRequestData(
 
 ## Backward Compatibility
 
-- `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
-- `createForm(OrderData)` is deprecated and remains available only as a compatibility proxy to `initiatePayment(OrderData)`.
+- `initiatePayment(OrderData, string $userCallbackUrl)` is available as the primary facade wrapper for payment initiation.
 - EUR currency constraints remain enforced.
 
 ## Documentation

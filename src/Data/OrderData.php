@@ -11,15 +11,22 @@ class OrderData
     private const API_CURRENCY = 'eur-sp';
 
     public function __construct(
+        private readonly string $id,
         private readonly string $amount,
         private readonly string $currency = self::SUPPORTED_CURRENCY
     ) {
         $this->validate();
     }
 
+    public function getId(): string
+    {
+        return $this->id;
+    }
+
     public function toArray(): array
     {
         return [
+            'id' => $this->id,
             'amount' => $this->amount,
             'currency' => self::API_CURRENCY,
         ];
@@ -37,6 +44,10 @@ class OrderData
 
     private function validate(): void
     {
+        if ($this->id === '') {
+            throw new ValidationException('Order id is required.');
+        }
+
         if (!is_numeric($this->amount) || (float) $this->amount <= 0.0) {
             throw new ValidationException('Order amount must be a valid positive number.');
         }

@@ -21,14 +21,14 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     private const CREATE_FORM_PATH = '/api/payment/createForm';
     private const SUPPORTED_CURRENCY = 'EUR';
 
-    public function initiatePayment(OrderData $order): array
+    public function initiatePayment(OrderData $order, string $userCallbackUrl): array
     {
         $request = new PaymentRequestData(
             gatewayCode: $this->code(),
-            orderId: 'aviagram-order',
+            orderId: $order->getId(),
             amount: $order->amount(),
             currency: $order->currency(),
-            callbackUrl: 'https://localhost/callback',
+            callbackUrl: $userCallbackUrl,
             meta: new DynamicDataBag([
                 'order' => $order->toArray(),
                 'provider' => [
@@ -38,11 +38,6 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         );
 
         return $this->initiate($request)->raw()->all();
-    }
-
-    public function createForm(OrderData $order): array
-    {
-        return $this->initiatePayment($order);
     }
 
     public function code(): string

@@ -8,8 +8,7 @@ use Illuminate\Support\Facades\Facade;
 
 /**
  * @method static \Rublex\CoreGateway\Data\PaymentInitResultData initiate(\Rublex\CoreGateway\Data\PaymentRequestData $request)
- * @method static array initiatePayment(\Aviagram\Data\OrderData $order)
- * @method static array createForm(\Aviagram\Data\OrderData $order)
+ * @method static array initiatePayment(\Aviagram\Data\OrderData $order, string $userCallbackUrl)
  *
  * @see AviagramGatewayService
  */

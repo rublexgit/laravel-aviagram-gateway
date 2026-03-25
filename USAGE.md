@@ -30,9 +30,11 @@ use Aviagram\Facades\Aviagram;
 
 $response = Aviagram::initiatePayment(
     new OrderData(
+        id: 'INV-1774369486',
         amount: '15',
         currency: 'EUR',
-    )
+    ),
+    userCallbackUrl: 'https://your-app.example.com/finpay/final-callback'
 );
 ```
 
@@ -60,6 +62,5 @@ $result = $gateway->initiate(new PaymentRequestData(
 
 ## Migration note
 
-- `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
-- `createForm()` is deprecated and kept only for backward compatibility; use `initiatePayment(OrderData)` in all new usage.
+- `initiatePayment(OrderData, string $userCallbackUrl)` is available as the primary facade wrapper for payment initiation.
 - New integrations should use the shared core contract DTOs directly.
