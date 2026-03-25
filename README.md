@@ -68,7 +68,7 @@ $result = $gateway->initiate(new PaymentRequestData(
 ## Backward Compatibility
 
 - `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
-- `createForm(OrderData)` remains available and now proxies to `initiatePayment(OrderData)`.
+- `createForm(OrderData)` is deprecated and remains available only as a compatibility proxy to `initiatePayment(OrderData)`.
 - EUR currency constraints remain enforced.
 
 ## Documentation

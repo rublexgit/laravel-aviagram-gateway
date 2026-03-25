@@ -61,5 +61,5 @@ $result = $gateway->initiate(new PaymentRequestData(
 ## Migration note
 
 - `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
-- Existing `createForm()` behavior remains available for backward compatibility.
-- New integrations can use the shared core contract DTOs directly.
+- `createForm()` is deprecated and kept only for backward compatibility; use `initiatePayment(OrderData)` in all new usage.
+- New integrations should use the shared core contract DTOs directly.
