@@ -32,8 +32,6 @@ Add credentials to your `.env` file:
 AVIAGRAM_BASE_URL=https://aviagram.app
 AVIAGRAM_CLIENT_ID=
 AVIAGRAM_CLIENT_SECRET=
-AVIAGRAM_USER_AGENT=aviagram-laravel-gateway/1.0.0
-AVIAGRAM_TIMEOUT=30
 ```
 
 ## Quick Start
