@@ -37,7 +37,18 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             ])
         );
 
-        return $this->initiate($request)->raw()->all();
+        $result = $this->initiate($request);
+
+        return [
+            'status' => $result->status()->value,
+            'responseCode' => $result->meta()->get('responseCode'),
+            'responseMessage' => $result->meta()->get('responseMessage'),
+            'orderId' => $order->getId(),
+            'transactionId' => $result->transactionId(),
+            'redirect_url' => $result->redirectUrl(),
+            'gatewayReference' => $result->gatewayReference(),
+            'raw' => $result->raw()->all(),
+        ];
     }
 
     public function code(): string
@@ -150,8 +161,8 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     {
         return new PaymentInitResultData(
             status: $this->resolveInitStatus($response),
-            transactionId: $this->extractString($response, ['transactionId', 'id']),
-            redirectUrl: $this->extractString($response, ['redirectUrl', 'url', 'formUrl']),
+            transactionId: $this->extractString($response, ['transactionId', 'orderId', 'id']),
+            redirectUrl: $this->extractString($response, ['redirectUrl', 'redirect_url', 'url', 'formUrl']),
             gatewayReference: $this->extractString($response, ['gatewayReference', 'reference', 'invoiceNo']),
             meta: new DynamicDataBag([
                 'responseCode' => $this->extractString($response, ['responseCode']),

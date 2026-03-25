@@ -48,7 +48,21 @@ $response = Aviagram::initiatePayment(
     ),
     userCallbackUrl: 'https://your-app.example.com/finpay/final-callback'
 );
+
+// Unified wrapper response shape:
+// [
+//     'status' => 'pending',
+//     'responseCode' => '2000000',
+//     'responseMessage' => 'Initiated',
+//     'orderId' => 'INV-1774369486',
+//     'transactionId' => 'TRX-123',
+//     'redirect_url' => 'https://aviagram.app/form/...',
+//     'gatewayReference' => 'REF-123',
+//     'raw' => [/* full provider payload */],
+// ]
 ```
+
+Provider-specific fields are preserved under `raw`.
 
 ## Contract-Based Usage
 

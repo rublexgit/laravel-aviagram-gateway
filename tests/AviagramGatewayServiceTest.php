@@ -47,9 +47,15 @@ final class AviagramGatewayServiceTest extends TestCase
 
                 return new PaymentInitResultData(
                     status: PaymentStatus::PENDING,
-                    raw: new DynamicDataBag([
+                    transactionId: 'TRX-AV-1001',
+                    redirectUrl: 'https://aviagram.app/form/INV-1001',
+                    gatewayReference: 'REF-AV-1001',
+                    meta: new DynamicDataBag([
                         'responseCode' => '2000000',
                         'responseMessage' => 'OK',
+                    ]),
+                    raw: new DynamicDataBag([
+                        'providerField' => 'providerValue',
                     ])
                 );
             }
@@ -60,7 +66,18 @@ final class AviagramGatewayServiceTest extends TestCase
             'https://merchant.example/final-callback'
         );
 
-        self::assertSame('2000000', $response['responseCode']);
+        self::assertSame([
+            'status' => 'pending',
+            'responseCode' => '2000000',
+            'responseMessage' => 'OK',
+            'orderId' => 'INV-1001',
+            'transactionId' => 'TRX-AV-1001',
+            'redirect_url' => 'https://aviagram.app/form/INV-1001',
+            'gatewayReference' => 'REF-AV-1001',
+            'raw' => [
+                'providerField' => 'providerValue',
+            ],
+        ], $response);
         self::assertInstanceOf(PaymentRequestData::class, $service->capturedRequest);
         self::assertSame('aviagram', $service->capturedRequest?->gatewayCode());
         self::assertSame('INV-1001', $service->capturedRequest?->meta()->requireString('order.id'));
@@ -82,8 +99,8 @@ final class AviagramGatewayServiceTest extends TestCase
         $result = $service->exposeMap([
             'responseCode' => '2000000',
             'responseMessage' => 'Initiated',
-            'id' => 'TRX-AV-1',
-            'formUrl' => 'https://aviagram.app/form/1',
+            'orderId' => 'TRX-AV-1',
+            'redirect_url' => 'https://aviagram.app/form/1',
         ]);
 
         self::assertSame(PaymentStatus::PENDING, $result->status());
