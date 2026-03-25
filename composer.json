@@ -17,13 +17,28 @@
             "Aviagram\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Aviagram\\Tests\\": "tests/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../laravel-core-gateway",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
     "require": {
         "illuminate/support": "*",
         "illuminate/container": "*",
         "illuminate/contracts": "*",
         "illuminate/http": "*",
         "illuminate/config": "*",
-        "illuminate/routing": "*"
+        "illuminate/routing": "*",
+        "rublex/laravel-core-gateway": "*"
     },
     "require-dev": {
         "phpunit/phpunit": "*"

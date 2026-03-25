@@ -20,8 +20,6 @@ php artisan vendor:publish --provider="Aviagram\AviagramServiceProvider" --tag="
 AVIAGRAM_BASE_URL=https://aviagram.app
 AVIAGRAM_CLIENT_ID=
 AVIAGRAM_CLIENT_SECRET=
-AVIAGRAM_USER_AGENT=aviagram-laravel-gateway/1.0.0
-AVIAGRAM_TIMEOUT=30
 ```
 
 ## Usage
@@ -30,7 +28,7 @@ AVIAGRAM_TIMEOUT=30
 use Aviagram\Data\OrderData;
 use Aviagram\Facades\Aviagram;
 
-$response = Aviagram::createForm(
+$response = Aviagram::initiatePayment(
     new OrderData(
         amount: '15',
         currency: 'EUR',
@@ -38,7 +36,30 @@ $response = Aviagram::createForm(
 );
 ```
 
+## Contract-Based Usage
+
+```php
+use Aviagram\Services\AviagramGatewayService;
+use Rublex\CoreGateway\Data\PaymentRequestData;
+
+$gateway = app(AviagramGatewayService::class);
+
+$result = $gateway->initiate(new PaymentRequestData(
+    gatewayCode: $gateway->code(),
+    orderId: 'INV-1',
+    amount: '15',
+    currency: 'EUR',
+    callbackUrl: 'https://merchant.example/callback'
+));
+```
+
 ## Currency rules
 
 - Only `EUR` is accepted.
 - The package automatically maps `EUR` to Aviagram API currency value `eur-sp`.
+
+## Migration note
+
+- `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
+- Existing `createForm()` behavior remains available for backward compatibility.
+- New integrations can use the shared core contract DTOs directly.

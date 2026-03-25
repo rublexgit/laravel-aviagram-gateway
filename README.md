@@ -7,7 +7,7 @@ A Laravel payment gateway package for Aviagram integration.
 
 ## Features
 
-- Create payment form via Aviagram API
+- Payment initiation via Aviagram API
 - EUR-only currency enforcement
 - Configurable via environment variables
 - Laravel facade support
@@ -40,13 +40,36 @@ AVIAGRAM_CLIENT_SECRET=
 use Aviagram\Data\OrderData;
 use Aviagram\Facades\Aviagram;
 
-$response = Aviagram::createForm(
+$response = Aviagram::initiatePayment(
     new OrderData(
         amount: '15',
         currency: 'EUR',
     )
 );
 ```
+
+## Contract-Based Usage
+
+```php
+use Aviagram\Services\AviagramGatewayService;
+use Rublex\CoreGateway\Data\PaymentRequestData;
+
+$gateway = app(AviagramGatewayService::class);
+
+$result = $gateway->initiate(new PaymentRequestData(
+    gatewayCode: $gateway->code(),
+    orderId: 'INV-1',
+    amount: '15',
+    currency: 'EUR',
+    callbackUrl: 'https://merchant.example/callback'
+));
+```
+
+## Backward Compatibility
+
+- `initiatePayment(OrderData)` is available as the primary facade wrapper for payment initiation.
+- `createForm(OrderData)` remains available and now proxies to `initiatePayment(OrderData)`.
+- EUR currency constraints remain enforced.
 
 ## Documentation
 

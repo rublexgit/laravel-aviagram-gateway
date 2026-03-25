@@ -1,8 +1,9 @@
 <?php
+declare(strict_types=1);
 
 namespace Aviagram\Data;
 
-use InvalidArgumentException;
+use Rublex\CoreGateway\Exceptions\ValidationException;
 
 class OrderData
 {
@@ -24,14 +25,24 @@ class OrderData
         ];
     }
 
+    public function amount(): string
+    {
+        return $this->amount;
+    }
+
+    public function currency(): string
+    {
+        return strtoupper($this->currency);
+    }
+
     private function validate(): void
     {
         if (!is_numeric($this->amount) || (float) $this->amount <= 0.0) {
-            throw new InvalidArgumentException('Order amount must be a valid positive number.');
+            throw new ValidationException('Order amount must be a valid positive number.');
         }
 
         if (strtoupper($this->currency) !== self::SUPPORTED_CURRENCY) {
-            throw new InvalidArgumentException('Only EUR currency is supported.');
+            throw new ValidationException('Only EUR currency is supported.');
         }
     }
 }
