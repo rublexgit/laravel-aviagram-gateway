@@ -1,0 +1,41 @@
+{
+    "name": "rublex/laravel-aviagram-gateway",
+    "description": "A Laravel payment gateway package for Aviagram",
+    "version": "1.0.0",
+    "keywords": [
+        "rublex",
+        "aviagram",
+        "payment",
+        "gateway",
+        "laravel"
+    ],
+    "license": "MIT",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "autoload": {
+        "psr-4": {
+            "Aviagram\\": "src/"
+        }
+    },
+    "require": {
+        "illuminate/support": "*",
+        "illuminate/container": "*",
+        "illuminate/contracts": "*",
+        "illuminate/http": "*",
+        "illuminate/config": "*",
+        "illuminate/routing": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "*"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Aviagram\\AviagramServiceProvider"
+            ],
+            "aliases": {
+                "Aviagram": "Aviagram\\Facades\\Aviagram"
+            }
+        }
+    }
+}
