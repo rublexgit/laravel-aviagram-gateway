@@ -22,15 +22,7 @@
             "Aviagram\\Tests\\": "tests/"
         }
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../laravel-core-gateway",
-            "options": {
-                "symlink": true
-            }
-        }
-    ],
+    "repositories": [],
     "require": {
         "illuminate/support": "*",
         "illuminate/container": "*",
