@@ -123,4 +123,28 @@ final class AviagramGatewayServiceTest extends TestCase
             )
         );
     }
+
+    public function test_normalize_callback_payload_maps_standard_fields(): void
+    {
+        $service = new AviagramGatewayService();
+
+        $normalized = $service->normalizeCallbackPayload([
+            'responseCode' => '2000000',
+            'responseMessage' => 'Paid',
+            'status' => 'success',
+            'order' => [
+                'id' => 'INV-9001',
+            ],
+            'transactionId' => 'TRX-9001',
+            'reference' => 'REF-9001',
+        ]);
+
+        self::assertSame('success', $normalized['status']);
+        self::assertSame('2000000', $normalized['responseCode']);
+        self::assertSame('Paid', $normalized['responseMessage']);
+        self::assertSame('INV-9001', $normalized['orderId']);
+        self::assertSame('TRX-9001', $normalized['transactionId']);
+        self::assertSame('REF-9001', $normalized['gatewayReference']);
+        self::assertArrayHasKey('raw', $normalized);
+    }
 }

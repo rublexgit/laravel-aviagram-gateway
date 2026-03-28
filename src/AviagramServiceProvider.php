@@ -13,8 +13,11 @@ class AviagramServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->publishes([
-            __DIR__ . '/config/aviagram.php' => config_path('aviagram.php'),
+            __DIR__ . '/config/aviagram.php' => $this->app->configPath('aviagram.php'),
         ], 'aviagram-config');
+
+        $this->loadRoutesFrom(__DIR__ . '/../routes/routes.php');
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
     }
 
     public function register(): void
