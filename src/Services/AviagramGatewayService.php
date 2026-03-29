@@ -126,7 +126,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
                 'response_message' => $this->normalizeNullableString($normalizedPayload['responseMessage'] ?? null),
                 'transaction_id' => $this->normalizeNullableString($normalizedPayload['transactionId'] ?? null),
                 'gateway_reference' => $this->normalizeNullableString($normalizedPayload['gatewayReference'] ?? null),
-                'callback_payload' => $normalizedPayload,
+                'callback_payload' => $this->encodeJsonPayload($normalizedPayload),
                 'forwarded' => $forwarded,
                 'forward_status' => $forwardStatus,
                 'forward_error' => $this->normalizeNullableString($error),
@@ -363,7 +363,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
                 'response_message' => $this->extractString($responsePayload, ['responseMessage']),
                 'transaction_id' => $this->extractString($responsePayload, ['transactionId', 'orderId', 'id']),
                 'gateway_reference' => $this->extractString($responsePayload, ['gatewayReference', 'reference', 'invoiceNo']),
-                'provider_payload' => $responsePayload,
+                'provider_payload' => $this->encodeJsonPayload($responsePayload),
                 'updated_at' => $now,
                 'created_at' => $now,
             ],
@@ -376,6 +376,16 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             'provider_payload',
             'updated_at',
         ]);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function encodeJsonPayload(array $payload): string
+    {
+        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        return is_string($encoded) ? $encoded : '{}';
     }
 
     private function normalizeNullableString(mixed $value): ?string
