@@ -11,6 +11,7 @@ use Illuminate\Container\Container;
 use Illuminate\Database\Connectors\ConnectionFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase;
@@ -195,6 +196,55 @@ final class AviagramGatewayServiceTest extends TestCase
         self::assertSame('Invalid JSON response from Aviagram.', $row->response_message);
         self::assertIsString($row->provider_payload);
         self::assertSame($responsePayload, json_decode($row->provider_payload, true));
+    }
+
+    public function test_gateway_http_options_returns_normalized_options_from_config(): void
+    {
+        Config::set('aviagram.http', [
+            'timeout' => 45,
+            'connect_timeout' => 5,
+            'proxy' => 'http://proxy.example.com:8080',
+            'verify' => false,
+        ]);
+
+        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+
+        self::assertSame(45.0, $options['timeout']);
+        self::assertSame(5.0, $options['connect_timeout']);
+        self::assertSame('http://proxy.example.com:8080', $options['proxy']);
+        self::assertFalse($options['verify']);
+    }
+
+    public function test_gateway_http_options_supports_protocol_array_proxy(): void
+    {
+        Config::set('aviagram.http.proxy', [
+            'http' => 'http://proxy.example.com:3128',
+            'https' => 'http://proxy.example.com:3129',
+            'no' => ['localhost'],
+        ]);
+
+        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+
+        self::assertSame([
+            'http' => 'http://proxy.example.com:3128',
+            'https' => 'http://proxy.example.com:3129',
+            'no' => ['localhost'],
+        ], $options['proxy']);
+    }
+
+    public function test_gateway_http_options_omits_null_proxy(): void
+    {
+        Config::set('aviagram.http', [
+            'timeout' => 30,
+            'connect_timeout' => 10,
+            'proxy' => null,
+            'verify' => true,
+        ]);
+
+        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+
+        self::assertArrayNotHasKey('proxy', $options);
+        self::assertSame(30.0, $options['timeout']);
     }
 
     public function test_store_callback_result_encodes_callback_payload_json_column(): void

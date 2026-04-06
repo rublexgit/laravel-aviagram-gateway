@@ -6,6 +6,7 @@ namespace Aviagram\Services;
 
 use Aviagram\Data\OrderData;
 use Rublex\CoreGateway\Contracts\Common\GatewayInterface;
+use Rublex\CoreGateway\Contracts\Http\ConfiguresGatewayHttpInterface;
 use Rublex\CoreGateway\Contracts\Payment\InitiatesPaymentInterface;
 use Rublex\CoreGateway\Data\DynamicDataBag;
 use Rublex\CoreGateway\Data\PaymentInitResultData;
@@ -13,13 +14,14 @@ use Rublex\CoreGateway\Data\PaymentRequestData;
 use Rublex\CoreGateway\Enums\GatewayType;
 use Rublex\CoreGateway\Enums\PaymentStatus;
 use Rublex\CoreGateway\Exceptions\ValidationException;
+use Rublex\CoreGateway\Support\GatewayHttpOptions;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\URL;
 
-class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterface
+class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterface, ConfiguresGatewayHttpInterface
 {
     private const CREATE_FORM_PATH = '/api/payment/createForm';
     private const SUPPORTED_CURRENCY = 'EUR';
@@ -86,6 +88,13 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         $this->storeInitTransaction($request->orderId(), $responsePayload);
 
         return $this->mapInitResponseToResult($responsePayload);
+    }
+
+    public function gatewayHttpOptions(): array
+    {
+        return GatewayHttpOptions::fromConfig(
+            (array) Config::get('aviagram.http', [])
+        );
     }
 
     public function getUserCallbackUrlForOrder(string $orderId): ?string
@@ -242,10 +251,11 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      */
     protected function sendCreateFormRequest(array $payload): array
     {
-        $response = Http::acceptJson()->asJson()->timeout(30)
+        $response = Http::acceptJson()->asJson()
             ->withHeaders([
-                'Authorization' => $this->authorizationHeader()
+                'Authorization' => $this->authorizationHeader(),
             ])
+            ->withOptions($this->gatewayHttpOptions())
             ->post($this->buildCreateFormUrl(), $payload);
 
         $decoded = $response->json();
