@@ -292,14 +292,11 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      */
     private function resolveInitStatus(array $response): PaymentStatus
     {
-        $statusValue = $this->extractString($response, ['status', 'paymentStatus']);
+        $statusValue = $this->extractString($response, ['status']);
         if ($statusValue !== null) {
             return match (strtolower($statusValue)) {
-                'success', 'paid', 'completed' => PaymentStatus::SUCCESS,
-                'pending', 'processing', 'waiting' => PaymentStatus::PENDING,
-                'failed', 'error' => PaymentStatus::FAILED,
-                'canceled', 'cancelled' => PaymentStatus::CANCELED,
-                'expired' => PaymentStatus::EXPIRED,
+                'RECEIVED' => PaymentStatus::SUCCESS,
+                'CANCELED'=> PaymentStatus::CANCELED,
                 default => PaymentStatus::UNKNOWN,
             };
         }

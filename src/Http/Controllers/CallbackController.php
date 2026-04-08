@@ -28,7 +28,6 @@ class CallbackController
             return new JsonResponse([
                 'responseCode' => '4040001',
                 'responseMessage' => 'User callback URL not found for order ID.',
-                'orderId' => $orderId,
             ], 404);
         }
 
@@ -49,8 +48,6 @@ class CallbackController
             return new JsonResponse([
                 'responseCode' => '5000001',
                 'responseMessage' => 'Callback forwarding failed.',
-                'orderId' => $orderId,
-                'forwarded' => false,
                 'error' => $exception->getMessage(),
             ], 500);
         }
@@ -69,9 +66,6 @@ class CallbackController
         return new JsonResponse([
             'responseCode' => '2000000',
             'responseMessage' => 'Callback processed.',
-            'orderId' => $orderId,
-            'forwarded' => $forwardResponse->successful(),
-            'forwardStatus' => $forwardResponse->status(),
         ]);
     }
 }
