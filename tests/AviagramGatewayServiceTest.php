@@ -12,6 +12,7 @@ use Illuminate\Database\Connectors\ConnectionFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase;
@@ -165,13 +166,30 @@ final class AviagramGatewayServiceTest extends TestCase
             'reference' => 'REF-9001',
         ]);
 
-        self::assertSame('success', $normalized['status']);
+        // 'success' is not in the known status map so it resolves to UNKNOWN
+        self::assertSame('unknown', $normalized['status']);
         self::assertSame('2000000', $normalized['responseCode']);
         self::assertSame('Paid', $normalized['responseMessage']);
         self::assertSame('INV-9001', $normalized['orderId']);
         self::assertSame('TRX-9001', $normalized['transactionId']);
         self::assertSame('REF-9001', $normalized['gatewayReference']);
         self::assertArrayHasKey('raw', $normalized);
+        self::assertArrayHasKey('amount', $normalized);
+        self::assertArrayHasKey('currency', $normalized);
+    }
+
+    public function test_normalize_callback_payload_extracts_amount_and_currency(): void
+    {
+        $service = new AviagramGatewayService();
+
+        $normalized = $service->normalizeCallbackPayload([
+            'orderId' => 'INV-8001',
+            'amount' => '99.50',
+            'currency' => 'eur-sp',
+        ]);
+
+        self::assertSame('99.50', $normalized['amount']);
+        self::assertSame('eur-sp', $normalized['currency']);
     }
 
     public function test_store_init_transaction_persists_invalid_json_response_without_array_to_string_error(): void
@@ -274,6 +292,163 @@ final class AviagramGatewayServiceTest extends TestCase
         self::assertSame($callbackPayload, json_decode($row->callback_payload, true));
     }
 
+    public function test_store_user_callback_url_persists_key_hash_and_expected_values(): void
+    {
+        $service = new AviagramGatewayService();
+        $rawKey = bin2hex(random_bytes(32));
+        $keyHash = hash('sha256', $rawKey);
+
+        $this->invokePrivateMethod($service, 'storeUserCallbackUrl', [
+            'INV-KEY-3001',
+            'https://merchant.example/cb',
+            $keyHash,
+            '250.00',
+            'EUR',
+        ]);
+
+        /** @var object{callback_key_hash: string|null, callback_key_consumed: int, expected_amount: string|null, expected_currency: string|null}|null $row */
+        $row = DB::table('aviagram_transactions')->where('order_id', 'INV-KEY-3001')->first([
+            'callback_key_hash',
+            'callback_key_consumed',
+            'expected_amount',
+            'expected_currency',
+        ]);
+
+        self::assertNotNull($row);
+        self::assertSame($keyHash, $row->callback_key_hash);
+        self::assertSame(0, (int) $row->callback_key_consumed);
+        self::assertSame('250.00', $row->expected_amount);
+        self::assertSame('EUR', $row->expected_currency);
+    }
+
+    public function test_resolve_transaction_by_callback_key_returns_matching_row(): void
+    {
+        $service = new AviagramGatewayService();
+        $rawKey = 'test-raw-key-abc123';
+        $keyHash = hash('sha256', $rawKey);
+
+        DB::table('aviagram_transactions')->insert([
+            'order_id' => 'INV-LOOKUP-4001',
+            'callback_key_hash' => $keyHash,
+            'callback_key_consumed' => false,
+            'expected_amount' => '50.00',
+            'expected_currency' => 'EUR',
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+
+        $transaction = $service->resolveTransactionByCallbackKey($rawKey);
+
+        self::assertNotNull($transaction);
+        self::assertSame('INV-LOOKUP-4001', $transaction->order_id);
+    }
+
+    public function test_resolve_transaction_by_callback_key_returns_null_for_unknown_key(): void
+    {
+        $transaction = (new AviagramGatewayService())->resolveTransactionByCallbackKey('no-such-key');
+
+        self::assertNull($transaction);
+    }
+
+    public function test_mark_callback_key_consumed_sets_flag_on_transaction(): void
+    {
+        $service = new AviagramGatewayService();
+        DB::table('aviagram_transactions')->insert([
+            'order_id' => 'INV-CONSUME-5001',
+            'callback_key_consumed' => false,
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+
+        $service->markCallbackKeyConsumed('INV-CONSUME-5001');
+
+        /** @var object{callback_key_consumed: int}|null $row */
+        $row = DB::table('aviagram_transactions')
+            ->where('order_id', 'INV-CONSUME-5001')
+            ->first(['callback_key_consumed']);
+
+        self::assertNotNull($row);
+        self::assertSame(1, (int) $row->callback_key_consumed);
+    }
+
+    public function test_store_callback_audit_persists_all_audit_fields(): void
+    {
+        $service = new AviagramGatewayService();
+        DB::table('aviagram_transactions')->insert([
+            'order_id' => 'INV-AUDIT-6001',
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+
+        $normalizedPayload = [
+            'status' => 'unknown',
+            'responseCode' => '2000000',
+            'responseMessage' => 'Callback received.',
+            'orderId' => 'INV-AUDIT-6001',
+            'transactionId' => null,
+            'gatewayReference' => null,
+            'amount' => '75.00',
+            'currency' => 'EUR',
+            'raw' => [],
+        ];
+        $headers = ['content-type' => ['application/json'], 'authorization' => ['Bearer secret']];
+
+        $service->storeCallbackAudit(
+            'INV-AUDIT-6001',
+            $normalizedPayload,
+            'https://gateway.example/api/v1/aviagram/callback/tok',
+            '203.0.113.10',
+            $headers,
+            '{"orderId":"INV-AUDIT-6001","amount":"75.00","currency":"EUR"}',
+            true,
+            null,
+            jobDispatched: true,
+        );
+
+        /** @var object $row */
+        $row = DB::table('aviagram_transactions')->where('order_id', 'INV-AUDIT-6001')->first();
+
+        self::assertNotNull($row);
+        self::assertSame('https://gateway.example/api/v1/aviagram/callback/tok', $row->callback_request_url);
+        self::assertSame('203.0.113.10', $row->callback_client_ip);
+        self::assertIsString($row->callback_headers);
+        self::assertSame($headers, json_decode($row->callback_headers, true));
+        self::assertSame('{"orderId":"INV-AUDIT-6001","amount":"75.00","currency":"EUR"}', $row->callback_raw_body);
+        self::assertSame(1, (int) $row->callback_validation_passed);
+        self::assertNull($row->callback_validation_reason);
+        self::assertSame(1, (int) $row->forward_job_dispatched);
+        self::assertNotNull($row->forward_job_dispatched_at);
+    }
+
+    public function test_store_callback_audit_records_validation_failure_reason(): void
+    {
+        $service = new AviagramGatewayService();
+        DB::table('aviagram_transactions')->insert([
+            'order_id' => 'INV-AUDIT-FAIL-7001',
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+
+        $service->storeCallbackAudit(
+            'INV-AUDIT-FAIL-7001',
+            [],
+            'https://gateway.example/api/v1/aviagram/callback/tok',
+            '10.0.0.1',
+            [],
+            '{"amount":"99.00"}',
+            false,
+            'Amount mismatch: received 99.00, expected 100.00.',
+        );
+
+        /** @var object $row */
+        $row = DB::table('aviagram_transactions')->where('order_id', 'INV-AUDIT-FAIL-7001')->first();
+
+        self::assertNotNull($row);
+        self::assertSame(0, (int) $row->callback_validation_passed);
+        self::assertSame('Amount mismatch: received 99.00, expected 100.00.', $row->callback_validation_reason);
+        self::assertSame(0, (int) $row->forward_job_dispatched);
+    }
+
     private static function bootstrapDatabase(): void
     {
         if (self::$databaseBootstrapped) {
@@ -304,6 +479,13 @@ final class AviagramGatewayServiceTest extends TestCase
             $table->id();
             $table->string('order_id')->unique();
             $table->string('callback_url')->nullable();
+            // Callback key security
+            $table->string('callback_key_hash')->nullable()->unique();
+            $table->boolean('callback_key_consumed')->default(false);
+            // Expected values at init time
+            $table->string('expected_amount')->nullable();
+            $table->string('expected_currency', 10)->nullable();
+            // Payment state
             $table->string('status')->nullable();
             $table->string('response_code')->nullable();
             $table->string('response_message')->nullable();
@@ -311,10 +493,22 @@ final class AviagramGatewayServiceTest extends TestCase
             $table->string('gateway_reference')->nullable();
             $table->json('provider_payload')->nullable();
             $table->json('callback_payload')->nullable();
+            // Audit: raw inbound callback request
+            $table->text('callback_request_url')->nullable();
+            $table->string('callback_client_ip', 45)->nullable();
+            $table->json('callback_headers')->nullable();
+            $table->text('callback_raw_body')->nullable();
+            // Validation outcome
+            $table->boolean('callback_validation_passed')->nullable();
+            $table->text('callback_validation_reason')->nullable();
+            // Synchronous forward (legacy / storeCallbackResult)
             $table->boolean('forwarded')->default(false);
             $table->unsignedSmallInteger('forward_status')->nullable();
             $table->text('forward_error')->nullable();
             $table->timestamp('forwarded_at')->nullable();
+            // Async forward job
+            $table->boolean('forward_job_dispatched')->default(false);
+            $table->timestamp('forward_job_dispatched_at')->nullable();
             $table->timestamps();
         });
 

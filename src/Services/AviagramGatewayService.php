@@ -82,9 +82,21 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             ]);
         }
 
-        $this->storeUserCallbackUrl($request->orderId(), $request->callbackUrl());
+        // Generate a cryptographically random, single-use callback key.
+        // Only the SHA-256 hash is stored; the raw token travels in the callback URL.
+        $callbackKey = bin2hex(random_bytes(32));
 
-        $responsePayload = $this->sendCreateFormRequest($this->resolveCreateFormPayload($request));
+        $this->storeUserCallbackUrl(
+            $request->orderId(),
+            $request->callbackUrl(),
+            hash('sha256', $callbackKey),
+            $request->amount(),
+            $request->currency(),
+        );
+
+        $responsePayload = $this->sendCreateFormRequest(
+            $this->resolveCreateFormPayload($request, $callbackKey)
+        );
         $this->storeInitTransaction($request->orderId(), $responsePayload);
 
         return $this->mapInitResponseToResult($responsePayload);
@@ -114,6 +126,92 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
                 'callback_url' => null,
                 'updated_at' => Carbon::now(),
             ]);
+    }
+
+    /**
+     * Resolves the aviagram_transactions row by matching the SHA-256 hash of the
+     * provided raw callback key. Returns null when no matching, unconsumed row exists.
+     */
+    public function resolveTransactionByCallbackKey(string $callbackKey): ?object
+    {
+        $row = DB::table(self::TRANSACTIONS_TABLE)
+            ->where('callback_key_hash', hash('sha256', $callbackKey))
+            ->first();
+
+        return ($row instanceof \stdClass) ? $row : null;
+    }
+
+    /**
+     * Marks the callback key for the given order as consumed so replay attempts
+     * are rejected. Should be called only after a successful callback has been
+     * acknowledged and the forward job dispatched.
+     */
+    public function markCallbackKeyConsumed(string $orderId): void
+    {
+        DB::table(self::TRANSACTIONS_TABLE)
+            ->where('order_id', $orderId)
+            ->update([
+                'callback_key_consumed' => true,
+                'updated_at' => Carbon::now(),
+            ]);
+    }
+
+    /**
+     * Persists audit data for a callback attempt together with the validation
+     * outcome. Called for every request that reaches the validation stage.
+     *
+     * @param array<string, mixed> $normalizedPayload
+     * @param array<string, mixed> $headers
+     */
+    public function storeCallbackAudit(
+        string $orderId,
+        array $normalizedPayload,
+        string $requestUrl,
+        string $clientIp,
+        array $headers,
+        string $rawBody,
+        bool $validationPassed,
+        ?string $validationReason,
+        bool $jobDispatched = false,
+    ): void {
+        $now = Carbon::now();
+        DB::table(self::TRANSACTIONS_TABLE)->upsert([
+            [
+                'order_id' => $orderId,
+                'status' => $this->normalizeNullableString($normalizedPayload['status'] ?? null),
+                'response_code' => $this->normalizeNullableString($normalizedPayload['responseCode'] ?? null),
+                'response_message' => $this->normalizeNullableString($normalizedPayload['responseMessage'] ?? null),
+                'transaction_id' => $this->normalizeNullableString($normalizedPayload['transactionId'] ?? null),
+                'gateway_reference' => $this->normalizeNullableString($normalizedPayload['gatewayReference'] ?? null),
+                'callback_payload' => $this->encodeJsonPayload($normalizedPayload),
+                'callback_request_url' => $requestUrl,
+                'callback_client_ip' => $clientIp,
+                'callback_headers' => $this->encodeJsonPayload($headers),
+                'callback_raw_body' => $rawBody,
+                'callback_validation_passed' => $validationPassed,
+                'callback_validation_reason' => $validationReason,
+                'forward_job_dispatched' => $jobDispatched,
+                'forward_job_dispatched_at' => $jobDispatched ? $now : null,
+                'updated_at' => $now,
+                'created_at' => $now,
+            ],
+        ], ['order_id'], [
+            'status',
+            'response_code',
+            'response_message',
+            'transaction_id',
+            'gateway_reference',
+            'callback_payload',
+            'callback_request_url',
+            'callback_client_ip',
+            'callback_headers',
+            'callback_raw_body',
+            'callback_validation_passed',
+            'callback_validation_reason',
+            'forward_job_dispatched',
+            'forward_job_dispatched_at',
+            'updated_at',
+        ]);
     }
 
     /**
@@ -168,6 +266,8 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      *     orderId: string|null,
      *     transactionId: string|null,
      *     gatewayReference: string|null,
+     *     amount: string|null,
+     *     currency: string|null,
      *     raw: array<string, mixed>
      * }
      */
@@ -180,6 +280,8 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             'orderId' => $this->extractString($payload, ['order.id', 'orderId', 'invoiceNo']),
             'transactionId' => $this->extractString($payload, ['transactionId', 'orderId', 'id']),
             'gatewayReference' => $this->extractString($payload, ['gatewayReference', 'reference', 'invoiceNo']),
+            'amount' => $this->extractString($payload, ['amount', 'order.amount']),
+            'currency' => $this->extractString($payload, ['currency', 'order.currency']),
             'raw' => $payload,
         ];
     }
@@ -236,11 +338,11 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     /**
      * @return array<string, mixed>
      */
-    protected function resolveCreateFormPayload(PaymentRequestData $request): array
+    protected function resolveCreateFormPayload(PaymentRequestData $request, string $callbackKey): array
     {
         return array_replace(
             $this->resolveOrderPayload($request),
-            ['callbackUrl' => $this->resolveGatewayCallbackUrl()]
+            ['callbackUrl' => $this->resolveGatewayCallbackUrl($callbackKey)]
         );
     }
 
@@ -335,23 +437,36 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         return null;
     }
 
-    private function resolveGatewayCallbackUrl(): string
+    private function resolveGatewayCallbackUrl(string $callbackKey): string
     {
-        return URL::route('aviagram.callback');
+        return URL::route('aviagram.callback', ['callbackKey' => $callbackKey]);
     }
 
-    private function storeUserCallbackUrl(string $orderId, string $userCallbackUrl): void
-    {
+    private function storeUserCallbackUrl(
+        string $orderId,
+        string $userCallbackUrl,
+        string $callbackKeyHash,
+        string $expectedAmount,
+        string $expectedCurrency,
+    ): void {
         $now = Carbon::now();
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
                 'callback_url' => $userCallbackUrl,
+                'callback_key_hash' => $callbackKeyHash,
+                'callback_key_consumed' => false,
+                'expected_amount' => $expectedAmount,
+                'expected_currency' => strtoupper($expectedCurrency),
                 'updated_at' => $now,
                 'created_at' => $now,
             ],
         ], ['order_id'], [
             'callback_url',
+            'callback_key_hash',
+            'callback_key_consumed',
+            'expected_amount',
+            'expected_currency',
             'updated_at',
         ]);
     }
