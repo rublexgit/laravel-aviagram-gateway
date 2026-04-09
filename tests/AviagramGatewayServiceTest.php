@@ -151,45 +151,145 @@ final class AviagramGatewayServiceTest extends TestCase
         );
     }
 
-    public function test_normalize_callback_payload_maps_standard_fields(): void
+    public function test_normalize_callback_payload_maps_strict_aviagram_fields(): void
     {
         $service = new AviagramGatewayService();
 
         $normalized = $service->normalizeCallbackPayload([
-            'responseCode' => '2000000',
-            'responseMessage' => 'Paid',
-            'status' => 'success',
-            'order' => [
-                'id' => 'INV-9001',
-            ],
-            'transactionId' => 'TRX-9001',
-            'reference' => 'REF-9001',
+            'orderId'       => 'a8kESvgQTTzcSQfppdM3bDRQ3Z3qMmM',
+            'amount'        => '120',
+            'status'        => 'RECEIVED',
+            'method'        => 'CARD',
+            'declinedReason'=> 'Error 3DS',
+            'currency'      => 'EUR',
+            'type'          => 'TOPUP',
+            'createdAt'     => '2025-10-09T18:42:00.000Z',
         ]);
 
-        // 'success' is not in the known status map so it resolves to UNKNOWN
-        self::assertSame('unknown', $normalized['status']);
-        self::assertSame('2000000', $normalized['responseCode']);
-        self::assertSame('Paid', $normalized['responseMessage']);
-        self::assertSame('INV-9001', $normalized['orderId']);
-        self::assertSame('TRX-9001', $normalized['transactionId']);
-        self::assertSame('REF-9001', $normalized['gatewayReference']);
-        self::assertArrayHasKey('raw', $normalized);
-        self::assertArrayHasKey('amount', $normalized);
-        self::assertArrayHasKey('currency', $normalized);
+        self::assertSame('a8kESvgQTTzcSQfppdM3bDRQ3Z3qMmM', $normalized['orderId']);
+        self::assertSame('120', $normalized['amount']);
+        self::assertSame('RECEIVED', $normalized['status']);
+        self::assertSame('CARD', $normalized['method']);
+        self::assertSame('Error 3DS', $normalized['declinedReason']);
+        self::assertSame('EUR', $normalized['currency']);
+        self::assertSame('TOPUP', $normalized['type']);
+        self::assertSame('2025-10-09T18:42:00.000Z', $normalized['createdAt']);
+
+        // transactionId must NOT be present — Aviagram callback does not provide it
+        self::assertArrayNotHasKey('transactionId', $normalized);
+        // No legacy envelope fields
+        self::assertArrayNotHasKey('responseCode', $normalized);
+        self::assertArrayNotHasKey('responseMessage', $normalized);
+        self::assertArrayNotHasKey('gatewayReference', $normalized);
+        self::assertArrayNotHasKey('raw', $normalized);
+    }
+
+    public function test_normalize_callback_payload_declined_reason_is_null_when_absent(): void
+    {
+        $normalized = (new AviagramGatewayService())->normalizeCallbackPayload([
+            'orderId'  => 'ORD-1',
+            'amount'   => '50',
+            'status'   => 'PAID',
+            'method'   => 'CARD',
+            'currency' => 'EUR',
+            'type'     => 'TOPUP',
+            'createdAt'=> '2025-10-09T18:42:00.000Z',
+        ]);
+
+        self::assertNull($normalized['declinedReason']);
     }
 
     public function test_normalize_callback_payload_extracts_amount_and_currency(): void
     {
-        $service = new AviagramGatewayService();
-
-        $normalized = $service->normalizeCallbackPayload([
-            'orderId' => 'INV-8001',
-            'amount' => '99.50',
-            'currency' => 'eur-sp',
+        $normalized = (new AviagramGatewayService())->normalizeCallbackPayload([
+            'orderId'  => 'INV-8001',
+            'amount'   => '99.50',
+            'currency' => 'EUR',
+            'status'   => 'RECEIVED',
+            'method'   => 'CARD',
+            'type'     => 'TOPUP',
+            'createdAt'=> '2025-10-09T18:42:00.000Z',
         ]);
 
         self::assertSame('99.50', $normalized['amount']);
-        self::assertSame('eur-sp', $normalized['currency']);
+        self::assertSame('EUR', $normalized['currency']);
+    }
+
+    public function test_store_init_transaction_sets_status_to_pending_regardless_of_provider_response(): void
+    {
+        $service = new AviagramGatewayService();
+
+        // Provider says "success" — init status must still be PENDING.
+        $this->invokePrivateMethod($service, 'storeInitTransaction', [
+            'INV-PENDING-0001',
+            ['responseCode' => '2000000', 'responseMessage' => 'OK', 'status' => 'RECEIVED'],
+        ]);
+
+        /** @var object{status: string|null}|null $row */
+        $row = DB::table('aviagram_transactions')
+            ->where('order_id', 'INV-PENDING-0001')
+            ->first(['status']);
+
+        self::assertNotNull($row);
+        self::assertSame('pending', $row->status);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('callbackStatusMappingProvider')]
+    public function test_store_callback_audit_updates_status_based_on_aviagram_status(
+        string $aviagramStatus,
+        string $expectedInternalStatus,
+    ): void {
+        $service = new AviagramGatewayService();
+        DB::table('aviagram_transactions')->insert([
+            'order_id'  => 'INV-STATUS-MAP-001',
+            'status'    => 'pending',
+            'created_at'=> Carbon::now(),
+            'updated_at'=> Carbon::now(),
+        ]);
+
+        $service->storeCallbackAudit(
+            'INV-STATUS-MAP-001',
+            [
+                'orderId'       => 'INV-STATUS-MAP-001',
+                'amount'        => '50.00',
+                'status'        => $aviagramStatus,
+                'method'        => 'CARD',
+                'declinedReason'=> null,
+                'currency'      => 'EUR',
+                'type'          => 'TOPUP',
+                'createdAt'     => '2025-10-09T18:42:00.000Z',
+            ],
+            'https://gateway.example/api/v1/aviagram/callback/tok',
+            '10.0.0.1',
+            [],
+            '{}',
+            true,
+            null,
+        );
+
+        /** @var object{status: string|null}|null $row */
+        $row = DB::table('aviagram_transactions')
+            ->where('order_id', 'INV-STATUS-MAP-001')
+            ->first(['status']);
+
+        self::assertNotNull($row);
+        self::assertSame($expectedInternalStatus, $row->status);
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function callbackStatusMappingProvider(): array
+    {
+        return [
+            'RECEIVED maps to success'  => ['RECEIVED',  'success'],
+            'PAID maps to success'      => ['PAID',      'success'],
+            'COMPLETED maps to success' => ['COMPLETED', 'success'],
+            'DECLINED maps to failed'   => ['DECLINED',  'failed'],
+            'EXPIRED maps to failed'    => ['EXPIRED',   'failed'],
+            'CANCELED maps to canceled' => ['CANCELED',  'canceled'],
+            'unknown maps to unknown'   => ['FOOBAR',    'unknown'],
+        ];
     }
 
     public function test_store_init_transaction_persists_invalid_json_response_without_array_to_string_error(): void
@@ -269,25 +369,26 @@ final class AviagramGatewayServiceTest extends TestCase
     {
         $service = new AviagramGatewayService();
         $callbackPayload = [
-            'status' => 'success',
-            'responseCode' => '2000000',
-            'responseMessage' => 'Paid',
-            'transactionId' => 'TRX-2001',
-            'gatewayReference' => 'REF-2001',
+            'orderId'       => 'INV-CB-2001',
+            'amount'        => '80.00',
+            'status'        => 'RECEIVED',
+            'method'        => 'CARD',
+            'declinedReason'=> null,
+            'currency'      => 'EUR',
+            'type'          => 'TOPUP',
+            'createdAt'     => '2025-10-09T18:42:00.000Z',
         ];
 
         $service->storeCallbackResult('INV-CB-2001', $callbackPayload, true, 200);
 
-        /** @var object{response_code: string|null, response_message: string|null, callback_payload: string|null}|null $row */
+        /** @var object{status: string|null, callback_payload: string|null}|null $row */
         $row = DB::table('aviagram_transactions')->where('order_id', 'INV-CB-2001')->first([
-            'response_code',
-            'response_message',
+            'status',
             'callback_payload',
         ]);
 
         self::assertNotNull($row);
-        self::assertSame('2000000', $row->response_code);
-        self::assertSame('Paid', $row->response_message);
+        self::assertSame('success', $row->status);
         self::assertIsString($row->callback_payload);
         self::assertSame($callbackPayload, json_decode($row->callback_payload, true));
     }
@@ -381,15 +482,14 @@ final class AviagramGatewayServiceTest extends TestCase
         ]);
 
         $normalizedPayload = [
-            'status' => 'unknown',
-            'responseCode' => '2000000',
-            'responseMessage' => 'Callback received.',
-            'orderId' => 'INV-AUDIT-6001',
-            'transactionId' => null,
-            'gatewayReference' => null,
-            'amount' => '75.00',
-            'currency' => 'EUR',
-            'raw' => [],
+            'orderId'       => 'INV-AUDIT-6001',
+            'amount'        => '75.00',
+            'status'        => 'RECEIVED',
+            'method'        => 'CARD',
+            'declinedReason'=> null,
+            'currency'      => 'EUR',
+            'type'          => 'TOPUP',
+            'createdAt'     => '2025-10-09T18:42:00.000Z',
         ];
         $headers = ['content-type' => ['application/json'], 'authorization' => ['Bearer secret']];
 

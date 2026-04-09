@@ -178,11 +178,9 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
-                'status' => $this->normalizeNullableString($normalizedPayload['status'] ?? null),
-                'response_code' => $this->normalizeNullableString($normalizedPayload['responseCode'] ?? null),
-                'response_message' => $this->normalizeNullableString($normalizedPayload['responseMessage'] ?? null),
-                'transaction_id' => $this->normalizeNullableString($normalizedPayload['transactionId'] ?? null),
-                'gateway_reference' => $this->normalizeNullableString($normalizedPayload['gatewayReference'] ?? null),
+                'status' => $this->resolveCallbackStatus(
+                    $this->normalizeNullableString($normalizedPayload['status'] ?? null)
+                )->value,
                 'callback_payload' => $this->encodeJsonPayload($normalizedPayload),
                 'callback_request_url' => $requestUrl,
                 'callback_client_ip' => $clientIp,
@@ -197,10 +195,6 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             ],
         ], ['order_id'], [
             'status',
-            'response_code',
-            'response_message',
-            'transaction_id',
-            'gateway_reference',
             'callback_payload',
             'callback_request_url',
             'callback_client_ip',
@@ -228,11 +222,9 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
-                'status' => $this->normalizeNullableString($normalizedPayload['status'] ?? null),
-                'response_code' => $this->normalizeNullableString($normalizedPayload['responseCode'] ?? null),
-                'response_message' => $this->normalizeNullableString($normalizedPayload['responseMessage'] ?? null),
-                'transaction_id' => $this->normalizeNullableString($normalizedPayload['transactionId'] ?? null),
-                'gateway_reference' => $this->normalizeNullableString($normalizedPayload['gatewayReference'] ?? null),
+                'status' => $this->resolveCallbackStatus(
+                    $this->normalizeNullableString($normalizedPayload['status'] ?? null)
+                )->value,
                 'callback_payload' => $this->encodeJsonPayload($normalizedPayload),
                 'forwarded' => $forwarded,
                 'forward_status' => $forwardStatus,
@@ -243,10 +235,6 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             ],
         ], ['order_id'], [
             'status',
-            'response_code',
-            'response_message',
-            'transaction_id',
-            'gateway_reference',
             'callback_payload',
             'forwarded',
             'forward_status',
@@ -257,32 +245,44 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     }
 
     /**
+     * Normalises the Aviagram callback body into a canonical payload.
+     *
+     * Aviagram callback body shape (exact):
+     * {
+     *   "orderId": "...",
+     *   "amount": "120",
+     *   "status": "RECEIVED",
+     *   "method": "CARD",
+     *   "declinedReason": "Error 3DS",   // nullable / absent on success
+     *   "currency": "EUR",
+     *   "type": "TOPUP",
+     *   "createdAt": "2025-10-09T18:42:00.000Z"
+     * }
+     *
      * @param array<string, mixed> $payload
      *
      * @return array{
-     *     status: string,
-     *     responseCode: string,
-     *     responseMessage: string,
      *     orderId: string|null,
-     *     transactionId: string|null,
-     *     gatewayReference: string|null,
      *     amount: string|null,
+     *     status: string|null,
+     *     method: string|null,
+     *     declinedReason: string|null,
      *     currency: string|null,
-     *     raw: array<string, mixed>
+     *     type: string|null,
+     *     createdAt: string|null
      * }
      */
     public function normalizeCallbackPayload(array $payload): array
     {
         return [
-            'status' => $this->resolveInitStatus($payload)->value,
-            'responseCode' => $this->extractString($payload, ['responseCode']) ?? '2000000',
-            'responseMessage' => $this->extractString($payload, ['responseMessage', 'message']) ?? 'Callback received.',
-            'orderId' => $this->extractString($payload, ['order.id', 'orderId', 'invoiceNo']),
-            'transactionId' => $this->extractString($payload, ['transactionId', 'orderId', 'id']),
-            'gatewayReference' => $this->extractString($payload, ['gatewayReference', 'reference', 'invoiceNo']),
-            'amount' => $this->extractString($payload, ['amount', 'order.amount']),
-            'currency' => $this->extractString($payload, ['currency', 'order.currency']),
-            'raw' => $payload,
+            'orderId'       => $this->extractString($payload, ['orderId']),
+            'amount'        => $this->extractString($payload, ['amount']),
+            'status'        => $this->extractString($payload, ['status']),
+            'method'        => $this->extractString($payload, ['method']),
+            'declinedReason'=> $this->extractString($payload, ['declinedReason']),
+            'currency'      => $this->extractString($payload, ['currency']),
+            'type'          => $this->extractString($payload, ['type']),
+            'createdAt'     => $this->extractString($payload, ['createdAt']),
         ];
     }
 
@@ -390,6 +390,20 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     }
 
     /**
+     * Maps a raw Aviagram callback status string to the internal PaymentStatus enum.
+     * Aviagram status values are uppercase (e.g. RECEIVED, DECLINED, CANCELED, PAID).
+     */
+    private function resolveCallbackStatus(?string $aviagramStatus): PaymentStatus
+    {
+        return match ($aviagramStatus !== null ? strtoupper($aviagramStatus) : '') {
+            'RECEIVED', 'PAID', 'COMPLETED' => PaymentStatus::SUCCESS,
+            'DECLINED', 'EXPIRED'           => PaymentStatus::FAILED,
+            'CANCELED'                      => PaymentStatus::CANCELED,
+            default                         => PaymentStatus::UNKNOWN,
+        };
+    }
+
+    /**
      * @param array<string, mixed> $response
      */
     private function resolveInitStatus(array $response): PaymentStatus
@@ -480,7 +494,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
-                'status' => $this->resolveInitStatus($responsePayload)->value,
+                'status' => PaymentStatus::PENDING->value,
                 'response_code' => $this->extractString($responsePayload, ['responseCode']),
                 'response_message' => $this->extractString($responsePayload, ['responseMessage']),
                 'transaction_id' => $this->extractString($responsePayload, ['transactionId', 'orderId', 'id']),

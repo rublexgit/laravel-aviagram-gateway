@@ -225,6 +225,18 @@ final class CallbackControllerTest extends TestCase
         self::assertSame('4220001', $this->decodeResponseCode($response));
     }
 
+    public function test_mismatched_order_id_in_payload_returns_422(): void
+    {
+        $this->seedTransaction();
+
+        // Send a body whose orderId differs from the transaction row's order_id
+        $response = $this->callController($this->buildBody(['orderId' => 'WRONG-ORDER-ID']));
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('4220004', $this->decodeResponseCode($response));
+        self::assertCount(0, self::$bus->dispatched);
+    }
+
     public function test_wrong_amount_returns_422(): void
     {
         $this->seedTransaction();

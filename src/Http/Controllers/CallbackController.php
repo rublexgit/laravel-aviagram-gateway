@@ -90,6 +90,18 @@ class CallbackController
             ], 422);
         }
 
+        // Verify the payload orderId exactly matches the transaction row's order_id.
+        if ($invoiceId !== $orderId) {
+            $aviagramGatewayService->storeCallbackAudit(
+                $orderId, $normalizedPayload, $fullUrl, $clientIp, $headers, $rawBody,
+                false, sprintf('Order ID mismatch: received %s, expected %s.', $invoiceId, $orderId),
+            );
+            return new JsonResponse([
+                'responseCode' => '4220004',
+                'responseMessage' => 'Order ID does not match the expected value.',
+            ], 422);
+        }
+
         // Validate amount (decimal-safe comparison via bccomp).
         $callbackAmount = $normalizedPayload['amount'] ?? null;
         $expectedAmount = (string) $transaction->expected_amount;
