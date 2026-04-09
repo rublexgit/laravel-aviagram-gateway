@@ -93,18 +93,29 @@ final class AviagramGatewayServiceTest extends TestCase
             'https://merchant.example/final-callback'
         );
 
-        self::assertSame([
-            'status' => 'pending',
-            'responseCode' => '2000000',
-            'responseMessage' => 'OK',
-            'orderId' => 'INV-1001',
-            'transactionId' => 'TRX-AV-1001',
-            'redirect_url' => 'https://aviagram.app/form/INV-1001',
-            'gatewayReference' => 'REF-AV-1001',
-            'raw' => [
-                'providerField' => 'providerValue',
-            ],
-        ], $response);
+        // initiatePayment now returns PaymentOutcomeData — the canonical contract shape
+        self::assertSame('INV-1001', $response->orderId());
+        self::assertSame('pending', $response->status());
+        self::assertSame('EUR', $response->currency());
+        self::assertSame('15', $response->amount());
+        self::assertNull($response->errorMessage());
+        self::assertSame('aviagram', $response->gatewayCode());
+        self::assertNotNull($response->occurredAt());
+
+        // Provider-specific init fields land in raw
+        $raw = $response->raw();
+        self::assertSame('2000000', $raw['responseCode']);
+        self::assertSame('OK', $raw['responseMessage']);
+        self::assertSame('TRX-AV-1001', $raw['transactionId']);
+        self::assertSame('https://aviagram.app/form/INV-1001', $raw['redirectUrl']);
+        self::assertSame('REF-AV-1001', $raw['gatewayReference']);
+
+        // toArray() keys are stable
+        self::assertSame(
+            ['orderId', 'status', 'currency', 'amount', 'errorMessage', 'gatewayCode', 'occurredAt', 'raw'],
+            array_keys($response->toArray()),
+        );
+
         self::assertInstanceOf(PaymentRequestData::class, $service->capturedRequest);
         self::assertSame('aviagram', $service->capturedRequest?->gatewayCode());
         self::assertSame('INV-1001', $service->capturedRequest?->meta()->requireString('order.id'));

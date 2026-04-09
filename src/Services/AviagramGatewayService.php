@@ -29,7 +29,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     private const SUPPORTED_CURRENCY = 'EUR';
     private const TRANSACTIONS_TABLE = 'aviagram_transactions';
 
-    public function initiatePayment(OrderData $order, string $userCallbackUrl): array
+    public function initiatePayment(OrderData $order, string $userCallbackUrl): PaymentOutcomeData
     {
         $request = new PaymentRequestData(
             gatewayCode: $this->code(),
@@ -47,16 +47,31 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
 
         $result = $this->initiate($request);
 
-        return [
-            'status' => $result->status()->value,
-            'responseCode' => $result->meta()->get('responseCode'),
+        // Provider-specific init fields that do not belong in the minimal contract.
+        $rawFields = array_filter([
+            'responseCode'    => $result->meta()->get('responseCode'),
             'responseMessage' => $result->meta()->get('responseMessage'),
-            'orderId' => $order->getId(),
-            'transactionId' => $result->transactionId(),
-            'redirect_url' => $result->redirectUrl(),
-            'gatewayReference' => $result->gatewayReference(),
-            'raw' => $result->raw()->all(),
-        ];
+            'transactionId'   => $result->transactionId(),
+            'redirectUrl'     => $result->redirectUrl(),
+            'gatewayReference'=> $result->gatewayReference(),
+        ], static fn(mixed $v): bool => $v !== null);
+
+        // Only populate errorMessage when initiation failed so the caller can
+        // surface the reason without parsing raw provider fields.
+        $errorMessage = $result->status() === PaymentStatus::FAILED
+            ? $this->normalizeNullableString($result->meta()->get('responseMessage'))
+            : null;
+
+        return new PaymentOutcomeData(
+            orderId: $order->getId(),
+            status: $result->status()->value,
+            currency: strtoupper($order->currency()),
+            amount: $order->amount(),
+            errorMessage: $errorMessage,
+            gatewayCode: $this->code(),
+            occurredAt: new DateTimeImmutable(),
+            raw: $rawFields !== [] ? $rawFields : null,
+        );
     }
 
     public function code(): string
