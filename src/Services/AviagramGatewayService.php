@@ -452,8 +452,8 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     {
         return match ($aviagramStatus !== null ? strtoupper($aviagramStatus) : '') {
             'RECEIVED' => PaymentStatus::SUCCESS,
-            'CANCELED'                      => PaymentStatus::CANCELED,
-            default                         => PaymentStatus::UNKNOWN,
+            'CANCELED' => PaymentStatus::CANCELED,
+            default => PaymentStatus::UNKNOWN,
         };
     }
 
