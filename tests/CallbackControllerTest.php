@@ -407,6 +407,7 @@ final class CallbackControllerTest extends TestCase
             $table->boolean('forwarded')->default(false);
             $table->unsignedSmallInteger('forward_status')->nullable();
             $table->text('forward_error')->nullable();
+            $table->text('forward_response_body')->nullable();
             $table->timestamp('forwarded_at')->nullable();
             $table->boolean('forward_job_dispatched')->default(false);
             $table->timestamp('forward_job_dispatched_at')->nullable();

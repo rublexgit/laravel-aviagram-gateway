@@ -215,6 +215,92 @@ final class AviagramGatewayServiceTest extends TestCase
         self::assertSame('EUR', $normalized['currency']);
     }
 
+    public function test_build_payment_outcome_maps_aviagram_payload_to_canonical_shape(): void
+    {
+        $service = new AviagramGatewayService();
+
+        $outcome = $service->buildPaymentOutcome('ORD-OUTCOME-001', [
+            'orderId'       => 'ORD-OUTCOME-001',
+            'amount'        => '120',
+            'status'        => 'RECEIVED',
+            'method'        => 'CARD',
+            'declinedReason'=> null,
+            'currency'      => 'EUR',
+            'type'          => 'TOPUP',
+            'createdAt'     => '2025-10-09T18:42:00.000Z',
+        ]);
+
+        self::assertSame('ORD-OUTCOME-001', $outcome->orderId());
+        self::assertSame('success', $outcome->status());         // RECEIVED → success
+        self::assertSame('EUR', $outcome->currency());
+        self::assertSame('120', $outcome->amount());
+        self::assertNull($outcome->errorMessage());              // declinedReason was null
+        self::assertSame('aviagram', $outcome->gatewayCode());
+        self::assertNotNull($outcome->occurredAt());
+
+        // Provider-specific extras land in raw; absent/null fields are omitted
+        $raw = $outcome->raw();
+        self::assertIsArray($raw);
+        self::assertSame('CARD', $raw['method']);
+        self::assertSame('TOPUP', $raw['type']);
+        self::assertSame('2025-10-09T18:42:00.000Z', $raw['createdAt']);
+        self::assertArrayNotHasKey('declinedReason', $raw);     // null → filtered out
+    }
+
+    public function test_build_payment_outcome_strips_provider_currency_suffix(): void
+    {
+        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-CURR-001', [
+            'orderId'  => 'ORD-CURR-001',
+            'amount'   => '50',
+            'status'   => 'RECEIVED',
+            'currency' => 'eur-sp',
+        ]);
+
+        self::assertSame('EUR', $outcome->currency());
+    }
+
+    public function test_build_payment_outcome_maps_declined_reason_to_error_message(): void
+    {
+        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-DEC-001', [
+            'orderId'       => 'ORD-DEC-001',
+            'amount'        => '75',
+            'status'        => 'CANCELED',
+            'currency'      => 'EUR',
+            'declinedReason'=> 'Error 3DS',
+        ]);
+
+        self::assertSame('canceled', $outcome->status());
+        self::assertSame('Error 3DS', $outcome->errorMessage());
+        self::assertSame('Error 3DS', $outcome->raw()['declinedReason'] ?? null);
+    }
+
+    public function test_build_payment_outcome_unknown_status_maps_to_unknown(): void
+    {
+        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-UNK-001', [
+            'orderId'  => 'ORD-UNK-001',
+            'amount'   => '10',
+            'status'   => 'FOOBAR',
+            'currency' => 'EUR',
+        ]);
+
+        self::assertSame('unknown', $outcome->status());
+    }
+
+    public function test_build_payment_outcome_to_array_keys_are_stable(): void
+    {
+        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-KEYS-001', [
+            'orderId'  => 'ORD-KEYS-001',
+            'amount'   => '10',
+            'status'   => 'RECEIVED',
+            'currency' => 'EUR',
+        ]);
+
+        self::assertSame(
+            ['orderId', 'status', 'currency', 'amount', 'errorMessage', 'gatewayCode', 'occurredAt', 'raw'],
+            array_keys($outcome->toArray()),
+        );
+    }
+
     public function test_store_init_transaction_sets_status_to_pending_regardless_of_provider_response(): void
     {
         $service = new AviagramGatewayService();
@@ -283,10 +369,6 @@ final class AviagramGatewayServiceTest extends TestCase
     {
         return [
             'RECEIVED maps to success'  => ['RECEIVED',  'success'],
-            'PAID maps to success'      => ['PAID',      'success'],
-            'COMPLETED maps to success' => ['COMPLETED', 'success'],
-            'DECLINED maps to failed'   => ['DECLINED',  'failed'],
-            'EXPIRED maps to failed'    => ['EXPIRED',   'failed'],
             'CANCELED maps to canceled' => ['CANCELED',  'canceled'],
             'unknown maps to unknown'   => ['FOOBAR',    'unknown'],
         ];
@@ -605,6 +687,7 @@ final class AviagramGatewayServiceTest extends TestCase
             $table->boolean('forwarded')->default(false);
             $table->unsignedSmallInteger('forward_status')->nullable();
             $table->text('forward_error')->nullable();
+            $table->text('forward_response_body')->nullable();
             $table->timestamp('forwarded_at')->nullable();
             // Async forward job
             $table->boolean('forward_job_dispatched')->default(false);

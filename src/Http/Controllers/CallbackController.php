@@ -143,7 +143,11 @@ class CallbackController
         // a queue-unavailable error lets Aviagram retry with the same key.
         $callbackUrl = $aviagramGatewayService->getUserCallbackUrlForOrder($orderId);
         if ($callbackUrl !== null) {
-            Bus::dispatch(new ForwardCallbackJob($orderId, $callbackUrl, $normalizedPayload));
+            Bus::dispatch(new ForwardCallbackJob(
+                $orderId,
+                $callbackUrl,
+                $aviagramGatewayService->buildPaymentOutcome($orderId, $normalizedPayload),
+            ));
         }
 
         $aviagramGatewayService->storeCallbackAudit(

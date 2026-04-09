@@ -8,8 +8,10 @@ use Aviagram\Data\OrderData;
 use Rublex\CoreGateway\Contracts\Common\GatewayInterface;
 use Rublex\CoreGateway\Contracts\Http\ConfiguresGatewayHttpInterface;
 use Rublex\CoreGateway\Contracts\Payment\InitiatesPaymentInterface;
+use DateTimeImmutable;
 use Rublex\CoreGateway\Data\DynamicDataBag;
 use Rublex\CoreGateway\Data\PaymentInitResultData;
+use Rublex\CoreGateway\Data\PaymentOutcomeData;
 use Rublex\CoreGateway\Data\PaymentRequestData;
 use Rublex\CoreGateway\Enums\GatewayType;
 use Rublex\CoreGateway\Enums\PaymentStatus;
@@ -245,6 +247,44 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     }
 
     /**
+     * Builds a PaymentOutcomeData from the normalized Aviagram callback payload.
+     *
+     * This is the canonical DTO forwarded to the merchant and used by any API
+     * resource that exposes payment delivery status. Provider-specific Aviagram
+     * fields (method, type, createdAt, declinedReason) are placed in `raw`.
+     *
+     * @param array<string, mixed> $normalizedPayload Output of normalizeCallbackPayload()
+     */
+    public function buildPaymentOutcome(string $orderId, array $normalizedPayload): PaymentOutcomeData
+    {
+        $internalStatus = $this->resolveCallbackStatus(
+            $this->normalizeNullableString($normalizedPayload['status'] ?? null)
+        );
+
+        // Provider-specific fields that do not belong in the minimal contract go in raw.
+        $rawFields = array_filter([
+            'method'         => $this->normalizeNullableString($normalizedPayload['method'] ?? null),
+            'type'           => $this->normalizeNullableString($normalizedPayload['type'] ?? null),
+            'createdAt'      => $this->normalizeNullableString($normalizedPayload['createdAt'] ?? null),
+            'declinedReason' => $this->normalizeNullableString($normalizedPayload['declinedReason'] ?? null),
+        ], static fn(mixed $v): bool => $v !== null);
+
+        // Strip provider suffixes (e.g. "eur-sp" → "EUR") for a clean ISO currency code.
+        $currency = strtoupper(explode('-', (string) ($normalizedPayload['currency'] ?? ''))[0]);
+
+        return new PaymentOutcomeData(
+            orderId: $orderId,
+            status: $internalStatus->value,
+            currency: $currency,
+            amount: (string) ($normalizedPayload['amount'] ?? ''),
+            errorMessage: $this->normalizeNullableString($normalizedPayload['declinedReason'] ?? null),
+            gatewayCode: $this->code(),
+            occurredAt: new DateTimeImmutable(),
+            raw: $rawFields !== [] ? $rawFields : null,
+        );
+    }
+
+    /**
      * Normalises the Aviagram callback body into a canonical payload.
      *
      * Aviagram callback body shape (exact):
@@ -279,7 +319,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             'amount'        => $this->extractString($payload, ['amount']),
             'status'        => $this->extractString($payload, ['status']),
             'method'        => $this->extractString($payload, ['method']),
-            'declinedReason'=> $this->extractString($payload, ['declinedReason']),
+            'declinedReason' => $this->extractString($payload, ['declinedReason']),
             'currency'      => $this->extractString($payload, ['currency']),
             'type'          => $this->extractString($payload, ['type']),
             'createdAt'     => $this->extractString($payload, ['createdAt']),
@@ -396,8 +436,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     private function resolveCallbackStatus(?string $aviagramStatus): PaymentStatus
     {
         return match ($aviagramStatus !== null ? strtoupper($aviagramStatus) : '') {
-            'RECEIVED', 'PAID', 'COMPLETED' => PaymentStatus::SUCCESS,
-            'DECLINED', 'EXPIRED'           => PaymentStatus::FAILED,
+            'RECEIVED' => PaymentStatus::SUCCESS,
             'CANCELED'                      => PaymentStatus::CANCELED,
             default                         => PaymentStatus::UNKNOWN,
         };
@@ -412,7 +451,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         if ($statusValue !== null) {
             return match (strtolower($statusValue)) {
                 'RECEIVED' => PaymentStatus::SUCCESS,
-                'CANCELED'=> PaymentStatus::CANCELED,
+                'CANCELED' => PaymentStatus::CANCELED,
                 default => PaymentStatus::UNKNOWN,
             };
         }
