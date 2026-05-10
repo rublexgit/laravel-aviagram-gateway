@@ -29,6 +29,44 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     private const SUPPORTED_CURRENCY = 'EUR';
     private const TRANSACTIONS_TABLE = 'aviagram_transactions';
 
+    public const DEFAULT_PAYMENT_METHOD = 'card';
+
+    /**
+     * Catalog of payment methods this driver can request from Aviagram. The key
+     * is the stable identifier used by callers and the FiatGateway admin UI;
+     * `payment_method` is the value Aviagram expects on `POST /api/payment/createForm`
+     * (per https://aviagram.gitbook.io/docsavialooo).
+     *
+     * Aviagram documents `card`, `applepay`, `googlepay`, and surfaces `SEPA`
+     * in its callback — `sepa` is included so admins can enable it from the UI
+     * once Aviagram returns SEPA on this account.
+     *
+     * @var array<string, array{label: string, payment_method: string}>
+     */
+    public const PAYMENT_METHODS = [
+        'card'      => ['label' => 'Card',       'payment_method' => 'card'],
+        'googlepay' => ['label' => 'Google Pay', 'payment_method' => 'googlepay'],
+        'applepay'  => ['label' => 'Apple Pay',  'payment_method' => 'applepay'],
+        'sepa'      => ['label' => 'SEPA',       'payment_method' => 'sepa'],
+    ];
+
+    /**
+     * @return array<int, array{key: string, label: string, payment_method: string}>
+     */
+    public static function availablePaymentMethods(): array
+    {
+        $methods = [];
+        foreach (self::PAYMENT_METHODS as $key => $meta) {
+            $methods[] = [
+                'key'            => $key,
+                'label'          => $meta['label'],
+                'payment_method' => $meta['payment_method'],
+            ];
+        }
+
+        return $methods;
+    }
+
     public function initiatePayment(OrderData $order, string $userCallbackUrl): PaymentOutcomeData
     {
         $request = new PaymentRequestData(
@@ -384,10 +422,48 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             $orderOverrides = [];
         }
 
-        return array_replace([
+        $body = array_replace([
             'amount' => $request->amount(),
             'currency' => strtolower($request->currency()) . '-sp',
         ], $orderOverrides);
+
+        // Only attach payment_method when the caller actually picked a channel.
+        // An absent value preserves pre-update behaviour: Aviagram defaults the
+        // form to its own picker (no payment_method == hosted-page selection).
+        $paymentMethod = $this->resolvePaymentMethod($request);
+        if ($paymentMethod !== null) {
+            $body['payment_method'] = $paymentMethod;
+        } else {
+            // Strip any default that slipped in via the meta.order overrides
+            // (e.g. OrderData::toArray() always emits payment_method=card).
+            unset($body['payment_method']);
+        }
+
+        return $body;
+    }
+
+    /**
+     * Resolve the Aviagram `payment_method` value from the request meta.
+     *
+     * Callers select the channel by passing `meta.payment_method`. An empty
+     * value or one that is not in PAYMENT_METHODS returns null, telling the
+     * caller in `resolveOrderPayload()` to omit the field entirely. Validation
+     * against the FiatGateway-enabled list is the caller's responsibility
+     * (handled in payment-shopkeeper FiatInvoiceService).
+     */
+    protected function resolvePaymentMethod(PaymentRequestData $request): ?string
+    {
+        $value = $request->meta()->get('payment_method');
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        $key = strtolower(trim($value));
+        if (!isset(self::PAYMENT_METHODS[$key])) {
+            return null;
+        }
+
+        return self::PAYMENT_METHODS[$key]['payment_method'];
     }
 
     /**

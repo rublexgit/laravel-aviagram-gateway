@@ -74,6 +74,40 @@ $result = $gateway->initiate(new PaymentRequestData(
 - Only `EUR` is accepted.
 - The package automatically maps `EUR` to Aviagram API currency value `eur-sp`.
 
+## Choosing a payment channel
+
+Aviagram exposes a `payment_method` field on `POST /api/payment/createForm`.
+The driver forwards whichever value the caller puts in `meta.payment_method`,
+matched against `AviagramGatewayService::PAYMENT_METHODS`:
+
+```
+card, googlepay, applepay, sepa
+```
+
+Examples:
+
+```php
+// Contract-based
+$gateway->initiate(new PaymentRequestData(
+    gatewayCode: $gateway->code(),
+    orderId: 'INV-1',
+    amount: '15',
+    currency: 'EUR',
+    callbackUrl: 'https://merchant.example/callback',
+    meta: new DynamicDataBag(['payment_method' => 'googlepay']),
+));
+
+// Facade
+Aviagram::initiatePayment(
+    new OrderData(id: 'INV-1', amount: '15', currency: 'EUR', paymentMethod: 'applepay'),
+    userCallbackUrl: 'https://merchant.example/callback',
+);
+```
+
+If `meta.payment_method` is omitted (or unknown), the driver does **not** set
+`payment_method` on the createForm body — Aviagram's hosted form lets the
+customer pick the channel, matching pre-update behaviour.
+
 ## Migration note
 
 - `initiatePayment(OrderData, string $userCallbackUrl)` is available as the primary facade wrapper for payment initiation.
