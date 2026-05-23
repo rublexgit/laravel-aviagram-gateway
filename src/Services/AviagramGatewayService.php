@@ -21,7 +21,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
+use Throwable;
 
 class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterface, ConfiguresGatewayHttpInterface
 {
@@ -484,14 +486,56 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      */
     protected function sendCreateFormRequest(array $payload): array
     {
-        $response = Http::acceptJson()->asJson()
-            ->withHeaders([
-                'Authorization' => $this->authorizationHeader(),
-            ])
-            ->withOptions($this->gatewayHttpOptions())
-            ->post($this->buildCreateFormUrl(), $payload);
+        $url = $this->buildCreateFormUrl();
+        $requestHeaders = [
+            'Authorization' => $this->authorizationHeader(),
+            'Accept'        => 'application/json',
+            'Content-Type'  => 'application/json',
+        ];
+        $orderId = isset($payload['orderId']) && is_string($payload['orderId']) ? $payload['orderId'] : null;
 
+        Log::channel('fiat-gateway')->info('aviagram.init.request', [
+            'gateway'  => 'aviagram',
+            'order_id' => $orderId,
+            'method'   => 'POST',
+            'url'      => $url,
+            'headers'  => $requestHeaders,
+            'body'     => $payload,
+        ]);
+
+        $startedAt = microtime(true);
+
+        try {
+            $response = Http::acceptJson()->asJson()
+                ->withHeaders(['Authorization' => $this->authorizationHeader()])
+                ->withOptions($this->gatewayHttpOptions())
+                ->post($url, $payload);
+        } catch (Throwable $e) {
+            Log::channel('fiat-gateway')->error('aviagram.init.exception', [
+                'gateway'    => 'aviagram',
+                'order_id'   => $orderId,
+                'url'        => $url,
+                'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+                'exception'  => $e::class,
+                'message'    => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+
+        $rawBody = (string) $response->body();
         $decoded = $response->json();
+
+        Log::channel('fiat-gateway')->info('aviagram.init.response', [
+            'gateway'        => 'aviagram',
+            'order_id'       => $orderId,
+            'url'            => $url,
+            'duration_ms'    => (int) ((microtime(true) - $startedAt) * 1000),
+            'status_code'    => $response->status(),
+            'response_headers' => $response->headers(),
+            'raw_body'       => $rawBody,
+            'decoded_body'   => is_array($decoded) ? $decoded : null,
+        ]);
+
         if (!is_array($decoded)) {
             return [
                 'responseCode' => (string) $response->status(),
@@ -583,7 +627,15 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
 
     private function resolveGatewayCallbackUrl(string $callbackKey): string
     {
-        return URL::route('aviagram.callback', ['callbackKey' => $callbackKey]);
+        $url = URL::route('aviagram.callback', ['callbackKey' => $callbackKey]);
+
+        Log::channel('fiat-gateway')->info('aviagram.callback_url.registered', [
+            'gateway'           => 'aviagram',
+            'callback_url'      => $url,
+            'callback_key_hash' => hash('sha256', $callbackKey),
+        ]);
+
+        return $url;
     }
 
     private function storeUserCallbackUrl(

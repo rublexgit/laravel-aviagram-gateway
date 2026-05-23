@@ -9,6 +9,7 @@ use Aviagram\Services\AviagramGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Handles inbound payment callbacks from Aviagram.
@@ -42,24 +43,38 @@ class CallbackController
         $clientIp = (string) $request->ip();
         $headers = $this->sanitizeHeaders($request->headers->all());
 
+        // First action: dump the raw inbound callback to the fiat-gateway log
+        // before any DB lookup or validation. Captures everything the gateway
+        // sent us so we can debug even if validation later rejects the request.
+        Log::channel('fiat-gateway')->info('aviagram.callback.received', [
+            'gateway'           => 'aviagram',
+            'method'            => $request->getMethod(),
+            'url'               => $fullUrl,
+            'client_ip'         => $clientIp,
+            'callback_key_hash' => hash('sha256', $callbackKey),
+            'query'             => $request->query->all(),
+            'headers'           => $request->headers->all(),
+            'raw_body'          => $rawBody,
+        ]);
+
         // Resolve the transaction by hashing the incoming key and doing a DB lookup.
         // No raw key ever reaches a log or the database.
         $transaction = $aviagramGatewayService->resolveTransactionByCallbackKey($callbackKey);
         if ($transaction === null) {
-            return new JsonResponse([
+            return $this->respond(null, [
                 'responseCode' => '4040002',
                 'responseMessage' => 'Invalid callback key.',
-            ], 404);
+            ], 404, 'invalid_callback_key');
         }
 
         $orderId = (string) $transaction->order_id;
 
         // Reject replay attempts — key already consumed by a previous successful callback.
         if ((bool) $transaction->callback_key_consumed) {
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4030001',
                 'responseMessage' => 'Callback key has already been used.',
-            ], 403);
+            ], 403, 'callback_key_already_consumed');
         }
 
         // Parse JSON body.
@@ -69,10 +84,10 @@ class CallbackController
                 $orderId, [], $fullUrl, $clientIp, $headers, $rawBody,
                 false, 'Invalid JSON body.',
             );
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4000002',
                 'responseMessage' => 'Invalid JSON body.',
-            ], 400);
+            ], 400, 'invalid_json_body');
         }
 
         $normalizedPayload = $aviagramGatewayService->normalizeCallbackPayload($payload);
@@ -84,10 +99,10 @@ class CallbackController
                 $orderId, $normalizedPayload, $fullUrl, $clientIp, $headers, $rawBody,
                 false, 'Order ID not found in payload.',
             );
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4220001',
                 'responseMessage' => 'Order ID not found in callback payload.',
-            ], 422);
+            ], 422, 'order_id_missing');
         }
 
         // Verify the payload orderId exactly matches the transaction row's order_id.
@@ -96,10 +111,10 @@ class CallbackController
                 $orderId, $normalizedPayload, $fullUrl, $clientIp, $headers, $rawBody,
                 false, sprintf('Order ID mismatch: received %s, expected %s.', $invoiceId, $orderId),
             );
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4220004',
                 'responseMessage' => 'Order ID does not match the expected value.',
-            ], 422);
+            ], 422, 'order_id_mismatch');
         }
 
         // Validate amount (decimal-safe comparison via bccomp).
@@ -114,10 +129,10 @@ class CallbackController
                     $expectedAmount,
                 ),
             );
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4220002',
                 'responseMessage' => 'Amount does not match expected value.',
-            ], 422);
+            ], 422, 'amount_mismatch');
         }
 
         // Validate currency (case-insensitive; strips provider suffixes like "-sp").
@@ -132,10 +147,10 @@ class CallbackController
                     $expectedCurrency,
                 ),
             );
-            return new JsonResponse([
+            return $this->respond($orderId, [
                 'responseCode' => '4220003',
                 'responseMessage' => 'Currency does not match expected value.',
-            ], 422);
+            ], 422, 'currency_mismatch');
         }
 
         // All checks passed.
@@ -143,6 +158,12 @@ class CallbackController
         // a queue-unavailable error lets Aviagram retry with the same key.
         $callbackUrl = $aviagramGatewayService->getUserCallbackUrlForOrder($orderId);
         if ($callbackUrl !== null) {
+            Log::channel('fiat-gateway')->info('aviagram.callback.forward_dispatched', [
+                'gateway'             => 'aviagram',
+                'order_id'            => $orderId,
+                'merchant_callback'   => $callbackUrl,
+                'normalized_payload'  => $normalizedPayload,
+            ]);
             Bus::dispatch(new ForwardCallbackJob(
                 $orderId,
                 $callbackUrl,
@@ -157,10 +178,28 @@ class CallbackController
 
         $aviagramGatewayService->markCallbackKeyConsumed($orderId);
 
-        return new JsonResponse([
+        return $this->respond($orderId, [
             'responseCode' => '2010000',
             'responseMessage' => 'Callback accepted.',
-        ], 201);
+        ], 201, 'accepted');
+    }
+
+    /**
+     * Logs the outbound response (sent back to the gateway) and returns it.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function respond(?string $orderId, array $body, int $status, string $outcome): JsonResponse
+    {
+        Log::channel('fiat-gateway')->info('aviagram.callback.responded', [
+            'gateway'        => 'aviagram',
+            'order_id'       => $orderId,
+            'outcome'        => $outcome,
+            'response_status' => $status,
+            'response_body'  => $body,
+        ]);
+
+        return new JsonResponse($body, $status);
     }
 
     /**

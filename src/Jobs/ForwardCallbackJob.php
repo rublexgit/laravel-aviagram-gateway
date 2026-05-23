@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Rublex\CoreGateway\Data\CallbackForwardResultData;
 use Rublex\CoreGateway\Data\PaymentOutcomeData;
 use Throwable;
@@ -53,6 +54,14 @@ class ForwardCallbackJob implements ShouldQueue
         try {
             $result = $this->sendForwardRequest();
         } catch (Throwable $exception) {
+            Log::channel('fiat-gateway')->error('aviagram.forward.exception', [
+                'gateway'      => 'aviagram',
+                'order_id'     => $this->orderId,
+                'callback_url' => $this->callbackUrl,
+                'attempt'      => method_exists($this, 'attempts') ? $this->attempts() : null,
+                'exception'    => $exception::class,
+                'message'      => $exception->getMessage(),
+            ]);
             $this->persistForwardResult(CallbackForwardResultData::fromException($exception));
             throw $exception;
         }
@@ -67,15 +76,45 @@ class ForwardCallbackJob implements ShouldQueue
      */
     protected function sendForwardRequest(): CallbackForwardResultData
     {
+        $body = $this->outcome->toArray();
+
+        Log::channel('fiat-gateway')->info('aviagram.forward.request', [
+            'gateway'      => 'aviagram',
+            'order_id'     => $this->orderId,
+            'attempt'      => method_exists($this, 'attempts') ? $this->attempts() : null,
+            'method'       => 'POST',
+            'callback_url' => $this->callbackUrl,
+            'headers'      => [
+                'Accept'       => 'application/json',
+                'Content-Type' => 'application/json',
+            ],
+            'body'         => $body,
+        ]);
+
+        $startedAt = microtime(true);
+
         $response = Http::acceptJson()
             ->asJson()
             ->timeout(self::FORWARD_TIMEOUT_SECONDS)
-            ->post($this->callbackUrl, $this->outcome->toArray());
+            ->post($this->callbackUrl, $body);
+
+        $rawBody = (string) $response->body();
+
+        Log::channel('fiat-gateway')->info('aviagram.forward.response', [
+            'gateway'          => 'aviagram',
+            'order_id'         => $this->orderId,
+            'callback_url'     => $this->callbackUrl,
+            'duration_ms'      => (int) ((microtime(true) - $startedAt) * 1000),
+            'status_code'      => $response->status(),
+            'successful'       => $response->successful(),
+            'response_headers' => $response->headers(),
+            'raw_body'         => $rawBody,
+        ]);
 
         return CallbackForwardResultData::fromHttpResponse(
             successful: $response->successful(),
             httpStatus: $response->status(),
-            responseBody: $response->body() !== '' ? $response->body() : null,
+            responseBody: $rawBody !== '' ? $rawBody : null,
             respondedAt: new DateTimeImmutable(),
         );
     }
