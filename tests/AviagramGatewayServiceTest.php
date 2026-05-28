@@ -63,6 +63,35 @@ final class AviagramGatewayServiceTest extends TestCase
         ], $payload);
     }
 
+    public function test_create_form_payload_uses_webhook_url_field(): void
+    {
+        $service = new class extends AviagramGatewayService {
+            protected function resolveGatewayCallbackUrl(string $callbackKey): string
+            {
+                return 'https://gateway.example/api/v1/aviagram/callback/' . $callbackKey;
+            }
+        };
+
+        $payload = $this->invokePrivateMethod($service, 'resolveCreateFormPayload', [
+            new PaymentRequestData(
+                gatewayCode: 'aviagram',
+                orderId: 'INV-1',
+                amount: '15',
+                currency: 'EUR',
+                callbackUrl: 'https://merchant.example/callback',
+            ),
+            'abc123callbackkey',
+        ]);
+
+        self::assertIsArray($payload);
+        self::assertArrayHasKey('webhook_url', $payload);
+        self::assertArrayNotHasKey('callbackUrl', $payload);
+        self::assertSame(
+            'https://gateway.example/api/v1/aviagram/callback/abc123callbackkey',
+            $payload['webhook_url'],
+        );
+    }
+
     public function test_initiate_payment_wrapper_maps_to_contract_request(): void
     {
         $service = new class extends AviagramGatewayService {

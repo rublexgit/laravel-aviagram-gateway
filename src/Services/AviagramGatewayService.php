@@ -475,7 +475,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
     {
         return array_replace(
             $this->resolveOrderPayload($request),
-            ['callbackUrl' => $this->resolveGatewayCallbackUrl($callbackKey)]
+            ['webhook_url' => $this->resolveGatewayCallbackUrl($callbackKey)]
         );
     }
 
@@ -625,7 +625,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         return null;
     }
 
-    private function resolveGatewayCallbackUrl(string $callbackKey): string
+    protected function resolveGatewayCallbackUrl(string $callbackKey): string
     {
         $url = URL::route('aviagram.callback', ['callbackKey' => $callbackKey]);
 
