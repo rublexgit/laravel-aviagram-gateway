@@ -676,6 +676,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
+                'provider_order_id' => $this->extractString($responsePayload, ['orderId', 'id']),
                 'status' => PaymentStatus::PENDING->value,
                 'response_code' => $this->extractString($responsePayload, ['responseCode']),
                 'response_message' => $this->extractString($responsePayload, ['responseMessage']),
@@ -686,6 +687,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
                 'created_at' => $now,
             ],
         ], ['order_id'], [
+            'provider_order_id',
             'status',
             'response_code',
             'response_message',

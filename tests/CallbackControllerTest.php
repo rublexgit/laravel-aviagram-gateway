@@ -86,6 +86,10 @@ final class CallbackControllerTest extends TestCase
     private static CapturingBusDispatcher $bus;
 
     private const ORDER_ID = 'CTL-ORDER-001';
+    // The provider generates its own order ID at init time and echoes it in the
+    // callback. It is deliberately different from our internal ORDER_ID so the
+    // tests exercise the real-world mismatch the fix addresses.
+    private const PROVIDER_ORDER_ID = '8c910984-128e-4925-9113-e6f552085fc0';
     private const CALLBACK_KEY = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
     private const EXPECTED_AMOUNT = '100.00';
     private const EXPECTED_CURRENCY = 'EUR';
@@ -237,6 +241,42 @@ final class CallbackControllerTest extends TestCase
         self::assertCount(0, self::$bus->dispatched);
     }
 
+    public function test_callback_carrying_internal_order_id_is_rejected(): void
+    {
+        $this->seedTransaction();
+
+        // The provider never sends our internal order_id — a callback that does
+        // must be rejected (this was the original bug: we matched on order_id).
+        $response = $this->callController($this->buildBody(['orderId' => self::ORDER_ID]));
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('4220004', $this->decodeResponseCode($response));
+        self::assertCount(0, self::$bus->dispatched);
+    }
+
+    public function test_callback_matches_provider_order_id(): void
+    {
+        $this->seedTransaction();
+
+        // Callback echoes the provider's order ID — must be accepted.
+        $response = $this->callController($this->buildBody(['orderId' => self::PROVIDER_ORDER_ID]));
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('2010000', $this->decodeResponseCode($response));
+    }
+
+    public function test_falls_back_to_order_id_when_provider_order_id_missing(): void
+    {
+        // Rows created before provider_order_id was captured fall back to
+        // matching against the internal order_id.
+        $this->seedTransaction(['provider_order_id' => null]);
+
+        $response = $this->callController($this->buildBody(['orderId' => self::ORDER_ID]));
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('2010000', $this->decodeResponseCode($response));
+    }
+
     public function test_wrong_amount_returns_422(): void
     {
         $this->seedTransaction();
@@ -299,6 +339,7 @@ final class CallbackControllerTest extends TestCase
     {
         DB::table('aviagram_transactions')->insert(array_replace([
             'order_id' => self::ORDER_ID,
+            'provider_order_id' => self::PROVIDER_ORDER_ID,
             'callback_url' => self::MERCHANT_CALLBACK_URL,
             'callback_key_hash' => hash('sha256', self::CALLBACK_KEY),
             'callback_key_consumed' => false,
@@ -317,7 +358,9 @@ final class CallbackControllerTest extends TestCase
     private function buildBody(array $overrides = [], bool $omitOrderId = false): string
     {
         $base = [
-            'orderId' => self::ORDER_ID,
+            // The provider echoes its own order ID (provider_order_id), not our
+            // internal order_id.
+            'orderId' => self::PROVIDER_ORDER_ID,
             'amount' => self::EXPECTED_AMOUNT,
             'currency' => self::EXPECTED_CURRENCY,
         ];
@@ -386,6 +429,7 @@ final class CallbackControllerTest extends TestCase
         DB::connection('testbench_ctrl')->getSchemaBuilder()->create('aviagram_transactions', function (Blueprint $table): void {
             $table->id();
             $table->string('order_id')->unique();
+            $table->string('provider_order_id')->nullable();
             $table->string('callback_url')->nullable();
             $table->string('callback_key_hash')->nullable()->unique();
             $table->boolean('callback_key_consumed')->default(false);

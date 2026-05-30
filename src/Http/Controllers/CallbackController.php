@@ -105,11 +105,17 @@ class CallbackController
             ], 422, 'order_id_missing');
         }
 
-        // Verify the payload orderId exactly matches the transaction row's order_id.
-        if ($invoiceId !== $orderId) {
+        // Verify the payload orderId matches the order ID the provider returned at
+        // init time (stored in provider_order_id) — the provider echoes its own ID
+        // in the callback, not our internal order_id. Fall back to order_id for
+        // rows created before provider_order_id was captured.
+        $expectedOrderId = isset($transaction->provider_order_id) && (string) $transaction->provider_order_id !== ''
+            ? (string) $transaction->provider_order_id
+            : $orderId;
+        if ($invoiceId !== $expectedOrderId) {
             $aviagramGatewayService->storeCallbackAudit(
                 $orderId, $normalizedPayload, $fullUrl, $clientIp, $headers, $rawBody,
-                false, sprintf('Order ID mismatch: received %s, expected %s.', $invoiceId, $orderId),
+                false, sprintf('Order ID mismatch: received %s, expected %s.', $invoiceId, $expectedOrderId),
             );
             return $this->respond($orderId, [
                 'responseCode' => '4220004',

@@ -360,6 +360,29 @@ final class AviagramGatewayServiceTest extends TestCase
         self::assertSame('pending', $row->status);
     }
 
+    public function test_store_init_transaction_persists_provider_order_id_from_response(): void
+    {
+        $service = new AviagramGatewayService();
+
+        // The createForm response carries the provider's own order ID; it must be
+        // stored in provider_order_id so callbacks can be matched against it.
+        $this->invokePrivateMethod($service, 'storeInitTransaction', [
+            'INV-PROV-0001',
+            [
+                'orderId' => '8c910984-128e-4925-9113-e6f552085fc0',
+                'redirect_url' => 'https://provider.example/api/payment/redirect/abc',
+            ],
+        ]);
+
+        /** @var object{provider_order_id: string|null}|null $row */
+        $row = DB::table('aviagram_transactions')
+            ->where('order_id', 'INV-PROV-0001')
+            ->first(['provider_order_id']);
+
+        self::assertNotNull($row);
+        self::assertSame('8c910984-128e-4925-9113-e6f552085fc0', $row->provider_order_id);
+    }
+
     #[\PHPUnit\Framework\Attributes\DataProvider('callbackStatusMappingProvider')]
     public function test_store_callback_audit_updates_status_based_on_aviagram_status(
         string $aviagramStatus,
@@ -700,6 +723,7 @@ final class AviagramGatewayServiceTest extends TestCase
         DB::connection('testbench')->getSchemaBuilder()->create('aviagram_transactions', function (Blueprint $table): void {
             $table->id();
             $table->string('order_id')->unique();
+            $table->string('provider_order_id')->nullable();
             $table->string('callback_url')->nullable();
             // Callback key security
             $table->string('callback_key_hash')->nullable()->unique();
