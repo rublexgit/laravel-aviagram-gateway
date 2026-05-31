@@ -473,10 +473,43 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      */
     protected function resolveCreateFormPayload(PaymentRequestData $request, string $callbackKey): array
     {
-        return array_replace(
+        $payload = array_replace(
             $this->resolveOrderPayload($request),
             ['webhook_url' => $this->resolveGatewayCallbackUrl($callbackKey)]
         );
+
+        // Attach the browser redirect target alongside webhook_url when the
+        // caller supplied one. Absent value preserves prior behaviour (no field).
+        $redirectUrl = $this->resolveRedirectUrl($request);
+        if ($redirectUrl !== null) {
+            $payload['redirect_url'] = $redirectUrl;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Resolve the browser redirect URL to send to Aviagram as `redirect_url`.
+     *
+     * Unlike `webhook_url` — the server-to-server callback this driver mints
+     * internally — `redirect_url` is a passthrough value supplied by the caller
+     * via `meta.redirect_url`. It is the page the customer's browser should land
+     * on after paying (e.g. the fiat invoice page
+     * https://p.rublex.io/fiat-payment?invoice_number=...). Returns null when
+     * the caller did not provide a valid URL, so the field is simply omitted.
+     */
+    protected function resolveRedirectUrl(PaymentRequestData $request): ?string
+    {
+        $value = $request->meta()->get('redirect_url');
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        if (filter_var($value, FILTER_VALIDATE_URL) === false) {
+            return null;
+        }
+
+        return $value;
     }
 
     /**
