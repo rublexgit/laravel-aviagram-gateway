@@ -19,6 +19,8 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase;
+use Rublex\CoreGateway\Contracts\Common\GatewayCredentialResolverInterface;
+use Rublex\CoreGateway\Data\GatewayCredentials;
 
 /**
  * Minimal Bus dispatcher fake that records dispatched jobs without
@@ -84,6 +86,42 @@ final class CallbackControllerTest extends TestCase
 {
     private static bool $bootstrapped = false;
     private static CapturingBusDispatcher $bus;
+
+    /**
+     * Stands in for the host application, which owns the `fiat_gateways` table.
+     * The controller resolves the account that opened the transaction through it.
+     */
+    private static function credentialResolver(): GatewayCredentialResolverInterface
+    {
+        return new class implements GatewayCredentialResolverInterface {
+            public function resolve(int $gatewayId): GatewayCredentials
+            {
+                return $this->credentials();
+            }
+
+            public function resolveBySlug(string $slug): GatewayCredentials
+            {
+                return $this->credentials();
+            }
+
+            public function resolveDefaultForDriver(string $driver): GatewayCredentials
+            {
+                return $this->credentials();
+            }
+
+            private function credentials(): GatewayCredentials
+            {
+                return new GatewayCredentials(
+                    driver: 'aviagram',
+                    secrets: ['client_secret' => 'test-secret'],
+                    settings: ['base_url' => 'https://aviagram.app', 'client_id' => 'test-client'],
+                    environment: GatewayCredentials::ENVIRONMENT_SANDBOX,
+                    gatewayId: 1,
+                    gatewaySlug: 'aviagram-test',
+                );
+            }
+        };
+    }
 
     private const ORDER_ID = 'CTL-ORDER-001';
     // The provider generates its own order ID at init time and echoes it in the
@@ -385,7 +423,7 @@ final class CallbackControllerTest extends TestCase
             ],
         );
 
-        return (new CallbackController())->handle($request, $callbackKey, new AviagramGatewayService());
+        return (new CallbackController())->handle($request, $callbackKey, self::credentialResolver());
     }
 
     private function decodeResponseCode(\Illuminate\Http\JsonResponse $response): string
@@ -429,6 +467,7 @@ final class CallbackControllerTest extends TestCase
         DB::connection('testbench_ctrl')->getSchemaBuilder()->create('aviagram_transactions', function (Blueprint $table): void {
             $table->id();
             $table->string('order_id')->unique();
+            $table->unsignedBigInteger('fiat_gateway_id')->nullable();
             $table->string('provider_order_id')->nullable();
             $table->string('callback_url')->nullable();
             $table->string('callback_key_hash')->nullable()->unique();

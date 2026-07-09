@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase;
 use Rublex\CoreGateway\Data\DynamicDataBag;
+use Rublex\CoreGateway\Data\GatewayCredentials;
 use Rublex\CoreGateway\Data\PaymentInitResultData;
 use Rublex\CoreGateway\Data\PaymentRequestData;
 use Rublex\CoreGateway\Enums\PaymentStatus;
@@ -25,6 +26,34 @@ use Rublex\CoreGateway\Exceptions\ValidationException;
 final class AviagramGatewayServiceTest extends TestCase
 {
     private static bool $databaseBootstrapped = false;
+
+    /**
+     * A driver instance is always bound to one merchant account, so tests build
+     * it from an explicit credential bundle rather than from global config.
+     *
+     * @param array<string, mixed> $secrets
+     * @param array<string, mixed> $settings
+     */
+    private static function credentials(
+        array $secrets = ['client_secret' => 'test-secret'],
+        array $settings = ['base_url' => 'https://aviagram.app', 'client_id' => 'test-client'],
+    ): GatewayCredentials {
+        return new GatewayCredentials(
+            driver: 'aviagram',
+            secrets: $secrets,
+            settings: $settings,
+            environment: GatewayCredentials::ENVIRONMENT_SANDBOX,
+            gatewayId: 1,
+            gatewaySlug: 'aviagram-test',
+        );
+    }
+
+    private static function service(
+        array $secrets = ['client_secret' => 'test-secret'],
+        array $settings = ['base_url' => 'https://aviagram.app', 'client_id' => 'test-client'],
+    ): AviagramGatewayService {
+        return AviagramGatewayService::fromCredentials(self::credentials($secrets, $settings));
+    }
 
     public static function setUpBeforeClass(): void
     {
@@ -44,7 +73,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_order_payload_uses_request_fields_by_default(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         $resolveOrderPayload = new \ReflectionMethod(AviagramGatewayService::class, 'resolveOrderPayload');
         $resolveOrderPayload->setAccessible(true);
 
@@ -65,7 +94,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_create_form_payload_uses_webhook_url_field(): void
     {
-        $service = new class extends AviagramGatewayService {
+        $service = new class(self::credentials()) extends AviagramGatewayService {
             protected function resolveGatewayCallbackUrl(string $callbackKey): string
             {
                 return 'https://gateway.example/api/v1/aviagram/callback/' . $callbackKey;
@@ -94,7 +123,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_create_form_payload_includes_redirect_url_from_meta(): void
     {
-        $service = new class extends AviagramGatewayService {
+        $service = new class(self::credentials()) extends AviagramGatewayService {
             protected function resolveGatewayCallbackUrl(string $callbackKey): string
             {
                 return 'https://gateway.example/api/v1/aviagram/callback/' . $callbackKey;
@@ -124,7 +153,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_create_form_payload_omits_redirect_url_when_absent_or_invalid(): void
     {
-        $service = new class extends AviagramGatewayService {
+        $service = new class(self::credentials()) extends AviagramGatewayService {
             protected function resolveGatewayCallbackUrl(string $callbackKey): string
             {
                 return 'https://gateway.example/api/v1/aviagram/callback/' . $callbackKey;
@@ -159,7 +188,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_initiate_payment_wrapper_maps_to_contract_request(): void
     {
-        $service = new class extends AviagramGatewayService {
+        $service = new class(self::credentials()) extends AviagramGatewayService {
             public ?PaymentRequestData $capturedRequest = null;
 
             public function initiate(PaymentRequestData $request): PaymentInitResultData
@@ -220,7 +249,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_init_response_mapping_preserves_raw_and_extracts_fields(): void
     {
-        $service = new class extends AviagramGatewayService {
+        $service = new class(self::credentials()) extends AviagramGatewayService {
             public function exposeMap(array $response): PaymentInitResultData
             {
                 return $this->mapInitResponseToResult($response);
@@ -245,7 +274,7 @@ final class AviagramGatewayServiceTest extends TestCase
     {
         $this->expectException(ValidationException::class);
 
-        (new AviagramGatewayService())->initiate(
+        (self::service())->initiate(
             new PaymentRequestData(
                 gatewayCode: 'aviagram',
                 orderId: 'INV-1',
@@ -258,7 +287,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_normalize_callback_payload_maps_strict_aviagram_fields(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
 
         $normalized = $service->normalizeCallbackPayload([
             'orderId'       => 'a8kESvgQTTzcSQfppdM3bDRQ3Z3qMmM',
@@ -291,7 +320,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_normalize_callback_payload_declined_reason_is_null_when_absent(): void
     {
-        $normalized = (new AviagramGatewayService())->normalizeCallbackPayload([
+        $normalized = (self::service())->normalizeCallbackPayload([
             'orderId'  => 'ORD-1',
             'amount'   => '50',
             'status'   => 'PAID',
@@ -306,7 +335,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_normalize_callback_payload_extracts_amount_and_currency(): void
     {
-        $normalized = (new AviagramGatewayService())->normalizeCallbackPayload([
+        $normalized = (self::service())->normalizeCallbackPayload([
             'orderId'  => 'INV-8001',
             'amount'   => '99.50',
             'currency' => 'EUR',
@@ -322,7 +351,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_build_payment_outcome_maps_aviagram_payload_to_canonical_shape(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
 
         $outcome = $service->buildPaymentOutcome('ORD-OUTCOME-001', [
             'orderId'       => 'ORD-OUTCOME-001',
@@ -354,7 +383,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_build_payment_outcome_strips_provider_currency_suffix(): void
     {
-        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-CURR-001', [
+        $outcome = (self::service())->buildPaymentOutcome('ORD-CURR-001', [
             'orderId'  => 'ORD-CURR-001',
             'amount'   => '50',
             'status'   => 'RECEIVED',
@@ -366,7 +395,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_build_payment_outcome_maps_declined_reason_to_error_message(): void
     {
-        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-DEC-001', [
+        $outcome = (self::service())->buildPaymentOutcome('ORD-DEC-001', [
             'orderId'       => 'ORD-DEC-001',
             'amount'        => '75',
             'status'        => 'CANCELED',
@@ -381,7 +410,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_build_payment_outcome_unknown_status_maps_to_unknown(): void
     {
-        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-UNK-001', [
+        $outcome = (self::service())->buildPaymentOutcome('ORD-UNK-001', [
             'orderId'  => 'ORD-UNK-001',
             'amount'   => '10',
             'status'   => 'FOOBAR',
@@ -393,7 +422,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_build_payment_outcome_to_array_keys_are_stable(): void
     {
-        $outcome = (new AviagramGatewayService())->buildPaymentOutcome('ORD-KEYS-001', [
+        $outcome = (self::service())->buildPaymentOutcome('ORD-KEYS-001', [
             'orderId'  => 'ORD-KEYS-001',
             'amount'   => '10',
             'status'   => 'RECEIVED',
@@ -408,7 +437,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_init_transaction_sets_status_to_pending_regardless_of_provider_response(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
 
         // Provider says "success" — init status must still be PENDING.
         $this->invokePrivateMethod($service, 'storeInitTransaction', [
@@ -427,7 +456,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_init_transaction_persists_provider_order_id_from_response(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
 
         // The createForm response carries the provider's own order ID; it must be
         // stored in provider_order_id so callbacks can be matched against it.
@@ -453,7 +482,7 @@ final class AviagramGatewayServiceTest extends TestCase
         string $aviagramStatus,
         string $expectedInternalStatus,
     ): void {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         DB::table('aviagram_transactions')->insert([
             'order_id'  => 'INV-STATUS-MAP-001',
             'status'    => 'pending',
@@ -504,7 +533,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_init_transaction_persists_invalid_json_response_without_array_to_string_error(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         $responsePayload = [
             'responseCode' => '502',
             'responseMessage' => 'Invalid JSON response from Aviagram.',
@@ -535,7 +564,7 @@ final class AviagramGatewayServiceTest extends TestCase
             'verify' => false,
         ]);
 
-        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+        $options = (self::service())->gatewayHttpOptions();
 
         self::assertSame(45.0, $options['timeout']);
         self::assertSame(5.0, $options['connect_timeout']);
@@ -551,7 +580,7 @@ final class AviagramGatewayServiceTest extends TestCase
             'no' => ['localhost'],
         ]);
 
-        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+        $options = (self::service())->gatewayHttpOptions();
 
         self::assertSame([
             'http' => 'http://proxy.example.com:3128',
@@ -569,7 +598,7 @@ final class AviagramGatewayServiceTest extends TestCase
             'verify' => true,
         ]);
 
-        $options = (new AviagramGatewayService())->gatewayHttpOptions();
+        $options = (self::service())->gatewayHttpOptions();
 
         self::assertArrayNotHasKey('proxy', $options);
         self::assertSame(30.0, $options['timeout']);
@@ -577,7 +606,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_callback_result_encodes_callback_payload_json_column(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         $callbackPayload = [
             'orderId'       => 'INV-CB-2001',
             'amount'        => '80.00',
@@ -605,7 +634,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_user_callback_url_persists_key_hash_and_expected_values(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         $rawKey = bin2hex(random_bytes(32));
         $keyHash = hash('sha256', $rawKey);
 
@@ -634,7 +663,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_resolve_transaction_by_callback_key_returns_matching_row(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         $rawKey = 'test-raw-key-abc123';
         $keyHash = hash('sha256', $rawKey);
 
@@ -648,7 +677,7 @@ final class AviagramGatewayServiceTest extends TestCase
             'updated_at' => Carbon::now(),
         ]);
 
-        $transaction = $service->resolveTransactionByCallbackKey($rawKey);
+        $transaction = AviagramGatewayService::findTransactionByCallbackKey($rawKey);
 
         self::assertNotNull($transaction);
         self::assertSame('INV-LOOKUP-4001', $transaction->order_id);
@@ -656,14 +685,14 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_resolve_transaction_by_callback_key_returns_null_for_unknown_key(): void
     {
-        $transaction = (new AviagramGatewayService())->resolveTransactionByCallbackKey('no-such-key');
+        $transaction = AviagramGatewayService::findTransactionByCallbackKey('no-such-key');
 
         self::assertNull($transaction);
     }
 
     public function test_mark_callback_key_consumed_sets_flag_on_transaction(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         DB::table('aviagram_transactions')->insert([
             'order_id' => 'INV-CONSUME-5001',
             'callback_key_consumed' => false,
@@ -684,7 +713,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_callback_audit_persists_all_audit_fields(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         DB::table('aviagram_transactions')->insert([
             'order_id' => 'INV-AUDIT-6001',
             'created_at' => Carbon::now(),
@@ -732,7 +761,7 @@ final class AviagramGatewayServiceTest extends TestCase
 
     public function test_store_callback_audit_records_validation_failure_reason(): void
     {
-        $service = new AviagramGatewayService();
+        $service = self::service();
         DB::table('aviagram_transactions')->insert([
             'order_id' => 'INV-AUDIT-FAIL-7001',
             'created_at' => Carbon::now(),
@@ -788,6 +817,7 @@ final class AviagramGatewayServiceTest extends TestCase
         DB::connection('testbench')->getSchemaBuilder()->create('aviagram_transactions', function (Blueprint $table): void {
             $table->id();
             $table->string('order_id')->unique();
+            $table->unsignedBigInteger('fiat_gateway_id')->nullable();
             $table->string('provider_order_id')->nullable();
             $table->string('callback_url')->nullable();
             // Callback key security

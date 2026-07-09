@@ -10,6 +10,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
+use Rublex\CoreGateway\Contracts\Common\GatewayCredentialResolverInterface;
+use Rublex\CoreGateway\Exceptions\GatewayCredentialException;
+use Rublex\CoreGateway\Support\CallbackCredentialResolver;
 
 /**
  * Handles inbound payment callbacks from Aviagram.
@@ -35,7 +38,7 @@ class CallbackController
     public function handle(
         Request $request,
         string $callbackKey,
-        AviagramGatewayService $aviagramGatewayService,
+        GatewayCredentialResolverInterface $credentialResolver,
     ): JsonResponse {
         // Capture audit data before touching the body stream or returning early.
         $rawBody = $request->getContent();
@@ -59,7 +62,7 @@ class CallbackController
 
         // Resolve the transaction by hashing the incoming key and doing a DB lookup.
         // No raw key ever reaches a log or the database.
-        $transaction = $aviagramGatewayService->resolveTransactionByCallbackKey($callbackKey);
+        $transaction = AviagramGatewayService::findTransactionByCallbackKey($callbackKey);
         if ($transaction === null) {
             return $this->respond(null, [
                 'responseCode' => '4040002',
@@ -68,6 +71,28 @@ class CallbackController
         }
 
         $orderId = (string) $transaction->order_id;
+
+        // Rebuild the account that opened this transaction; several accounts of
+        // this driver share the callback route.
+        try {
+            $aviagramGatewayService = AviagramGatewayService::fromCredentials(CallbackCredentialResolver::forTransaction(
+                $credentialResolver,
+                AviagramGatewayService::driver(),
+                $transaction->fiat_gateway_id ?? null,
+            ));
+        } catch (GatewayCredentialException $e) {
+            Log::channel('fiat-gateway')->error('aviagram.callback.credentials_unavailable', [
+                'gateway'         => 'aviagram',
+                'order_id'        => $orderId,
+                'fiat_gateway_id' => $transaction->fiat_gateway_id ?? null,
+                'message'         => $e->getMessage(),
+            ]);
+
+            return $this->respond($orderId, [
+                'responseCode' => '5030001',
+                'responseMessage' => 'Gateway credentials unavailable.',
+            ], 503, 'credentials_unavailable');
+        }
 
         // Reject replay attempts — key already consumed by a previous successful callback.
         if ((bool) $transaction->callback_key_consumed) {

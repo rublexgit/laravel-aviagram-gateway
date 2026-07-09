@@ -3,6 +3,7 @@
 namespace Aviagram;
 
 use Illuminate\Support\ServiceProvider;
+use Rublex\CoreGateway\Support\GatewayDriverRegistry;
 
 class AviagramServiceProvider extends ServiceProvider
 {
@@ -20,17 +21,15 @@ class AviagramServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
     }
 
+    /**
+     * The driver is registered by key rather than bound as a singleton: an
+     * instance is only meaningful once it carries the credentials of one merchant
+     * account, and there may be several. Build one via GatewayFactory.
+     */
     public function register(): void
     {
-        $this->app->singleton(Services\AviagramGatewayService::class, function ($app) {
-            return new Services\AviagramGatewayService();
-        });
+        GatewayDriverRegistry::register(Services\AviagramGatewayService::class);
 
         $this->mergeConfigFrom(__DIR__ . '/config/aviagram.php', 'aviagram');
-    }
-
-    public function provides(): array
-    {
-        return [Services\AviagramGatewayService::class];
     }
 }

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Aviagram\Services;
 
 use Aviagram\Data\OrderData;
-use Rublex\CoreGateway\Contracts\Common\GatewayInterface;
+use Rublex\CoreGateway\Contracts\Common\ConfigurableGatewayInterface;
 use Rublex\CoreGateway\Contracts\Http\ConfiguresGatewayHttpInterface;
 use Rublex\CoreGateway\Contracts\Payment\InitiatesPaymentInterface;
 use DateTimeImmutable;
+use Rublex\CoreGateway\Data\CredentialField;
+use Rublex\CoreGateway\Data\CredentialSchema;
 use Rublex\CoreGateway\Data\DynamicDataBag;
+use Rublex\CoreGateway\Data\GatewayCredentials;
 use Rublex\CoreGateway\Data\PaymentInitResultData;
 use Rublex\CoreGateway\Data\PaymentOutcomeData;
 use Rublex\CoreGateway\Data\PaymentRequestData;
@@ -25,11 +28,15 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Throwable;
 
-class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterface, ConfiguresGatewayHttpInterface
+class AviagramGatewayService implements ConfigurableGatewayInterface, InitiatesPaymentInterface, ConfiguresGatewayHttpInterface
 {
+    private const DRIVER = 'aviagram';
     private const CREATE_FORM_PATH = '/api/payment/createForm';
     private const SUPPORTED_CURRENCY = 'EUR';
     private const TRANSACTIONS_TABLE = 'aviagram_transactions';
+
+    /** @var array<int, string> Credential keys required before any request is signed. */
+    private const REQUIRED_KEYS = ['base_url', 'client_id', 'client_secret'];
 
     public const DEFAULT_PAYMENT_METHOD = 'card';
 
@@ -114,9 +121,41 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         );
     }
 
+    public function __construct(private readonly GatewayCredentials $credentials)
+    {
+    }
+
+    public static function driver(): string
+    {
+        return self::DRIVER;
+    }
+
+    public static function fromCredentials(GatewayCredentials $credentials): static
+    {
+        return new static($credentials);
+    }
+
+    public function credentials(): GatewayCredentials
+    {
+        return $this->credentials;
+    }
+
+    /**
+     * The client secret is the HTTP Basic password; the client id is the username
+     * half and travels in cleartext, so it is a setting.
+     */
+    public static function credentialSchema(): CredentialSchema
+    {
+        return CredentialSchema::make(
+            CredentialField::url('base_url', 'Base URL', 'Provider API base URL for this account.'),
+            CredentialField::text('client_id', 'Client ID'),
+            CredentialField::secret('client_secret', 'Client Secret'),
+        );
+    }
+
     public function code(): string
     {
-        return 'aviagram';
+        return self::DRIVER;
     }
 
     public function type(): GatewayType
@@ -130,7 +169,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
             throw new ValidationException('Only EUR currency is supported.');
         }
 
-        $missingConfigKeys = $this->getMissingConfigKeys();
+        $missingConfigKeys = $this->credentials->missing(self::REQUIRED_KEYS);
         if ($missingConfigKeys !== []) {
             return $this->mapInitResponseToResult([
                 'responseCode' => '5000002',
@@ -189,7 +228,11 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
      * Resolves the aviagram_transactions row by matching the SHA-256 hash of the
      * provided raw callback key. Returns null when no matching, unconsumed row exists.
      */
-    public function resolveTransactionByCallbackKey(string $callbackKey): ?object
+    /**
+     * Static because the callback controller has to find the transaction before
+     * it knows which account's credentials to build the service with.
+     */
+    public static function findTransactionByCallbackKey(string $callbackKey): ?object
     {
         $row = DB::table(self::TRANSACTIONS_TABLE)
             ->where('callback_key_hash', hash('sha256', $callbackKey))
@@ -383,35 +426,17 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
 
     private function authorizationHeader(): string
     {
-        $clientId = trim((string) Config::get('aviagram.client_id'));
-        $clientSecret = trim((string) Config::get('aviagram.client_secret'));
+        $clientId = trim($this->credentials->requireSetting('client_id'));
+        $clientSecret = trim($this->credentials->requireSecret('client_secret'));
 
         return 'Basic ' . base64_encode($clientId . ':' . $clientSecret);
     }
 
     private function buildCreateFormUrl(): string
     {
-        $baseUrl = rtrim((string) Config::get('aviagram.base_url'), '/');
+        $baseUrl = rtrim($this->credentials->requireSetting('base_url'), '/');
 
         return $baseUrl . self::CREATE_FORM_PATH;
-    }
-
-    private function getMissingConfigKeys(): array
-    {
-        $requiredConfig = [
-            'AVIAGRAM_BASE_URL' => Config::get('aviagram.base_url'),
-            'AVIAGRAM_CLIENT_ID' => Config::get('aviagram.client_id'),
-            'AVIAGRAM_CLIENT_SECRET' => Config::get('aviagram.client_secret'),
-        ];
-
-        $missingKeys = [];
-        foreach ($requiredConfig as $key => $value) {
-            if (!is_string($value) || trim($value) === '') {
-                $missingKeys[] = $key;
-            }
-        }
-
-        return $missingKeys;
     }
 
     /**
@@ -682,6 +707,9 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
         DB::table(self::TRANSACTIONS_TABLE)->upsert([
             [
                 'order_id' => $orderId,
+                // Pins the transaction to the account that opened it, so the
+                // callback verifies against the same client secret.
+                'fiat_gateway_id' => $this->credentials->gatewayId(),
                 'callback_url' => $userCallbackUrl,
                 'callback_key_hash' => $callbackKeyHash,
                 'callback_key_consumed' => false,
@@ -691,6 +719,7 @@ class AviagramGatewayService implements GatewayInterface, InitiatesPaymentInterf
                 'created_at' => $now,
             ],
         ], ['order_id'], [
+            'fiat_gateway_id',
             'callback_url',
             'callback_key_hash',
             'callback_key_consumed',
